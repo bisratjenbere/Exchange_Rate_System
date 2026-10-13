@@ -1,0 +1,17 @@
+[Unit]
+Description=Ethiopian Bank Exchange Rate Collection
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bisru
+WorkingDirectory=/home/bisru/Exchange_Rate_System
+ExecStart=python3 -m scheduler.run_job
+StandardOutput=journal
+StandardError=journal
+# Exit code 1 = all sources failed; systemd marks the run as failed
+SuccessExitStatus=0
+
+[Install]
+WantedBy=multi-user.target

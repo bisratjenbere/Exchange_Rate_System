@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily trigger for Ethiopian Bank Exchange Rate Collection
+Requires=exchange_rates.service
+
+[Timer]
+# 08:00 Addis Ababa time (EAT = UTC+3)
+OnCalendar=*-*-* 05:00:00 UTC
+# If the system was off at 05:00, run as soon as it comes back up
+Persistent=true
+Unit=exchange_rates.service
+
+[Install]
+WantedBy=timers.target

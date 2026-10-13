@@ -1,0 +1,20 @@
+# Ethiopian Bank Exchange Rate Collector — cron schedule
+#
+# Install:
+#   crontab -e
+#   paste the line below (adjust PROJECT_DIR and python path)
+#
+# Runs daily at 08:00 Addis Ababa time (EAT = UTC+3 → 05:00 UTC).
+# Ethiopian banks publish morning rates; 08:00 EAT catches all of them.
+#
+# Stdout+stderr appended to logs/cron.log.
+# Exit code 1 (all sources failed) is visible in cron mail if MAILTO is set.
+#
+# Environment variables:
+#   DATABASE_URL  — override default DSN (dbname=exchange_rates)
+#   MAILTO        — set to your email to receive failure notifications
+
+MAILTO=""
+PROJECT_DIR=/home/bisru/Exchange_Rate_System
+
+0 5 * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
