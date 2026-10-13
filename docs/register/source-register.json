@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "notes": "Normalized from PLACE_REGISTER_HERE.md. One shape per bank. Addis updated to partially_verified per default 18. 'other' category removed per default 1. source_authority added per default 2.",
+  "canonical_categories": ["cash", "transactional", "weighted_average", "indicative_reference"],
+  "banks": [
+    {
+      "bank_code": "CBE", "bank_name": "Commercial Bank of Ethiopia",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "cbe_api",
+        "source_url": "https://combanketh.et/cbeapi/daily-exchange-rates/",
+        "collection_method": "api", "http_method": "GET",
+        "query_parameters": {"Date": "YYYY-MM-DD"},
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified",
+        "is_enabled": false,
+        "known_source_fields": {
+          "currency_code": "currency.CurrencyCode",
+          "currency_name": "currency.CurrencyName",
+          "cash_buying": "cashBuying", "cash_selling": "cashSelling",
+          "transactional_buying": "transactionalBuying", "transactional_selling": "transactionalSelling"
+        },
+        "requires_verification": [
+          "Exact response envelope and nesting",
+          "Publication and effective-date semantics",
+          "Stable source record identifier",
+          "Currency-code validity",
+          "Buying/selling meaning vs official CBE display",
+          "Empty-response and error behavior",
+          "Effect of _limit parameter (default 16: do not send until confirmed)"
+        ]
+      }]
+    },
+    {
+      "bank_code": "DASHEN", "bank_name": "Dashen Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "dashen_html",
+        "source_url": "https://dashenbanksc.com/daily-exchange-rates/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified",
+        "is_enabled": false,
+        "source_sections": [
+          {"section_name": "Transactions Buying/Selling", "canonical_category": "transactional"},
+          {"section_name": "Cash Buying/Selling", "canonical_category": "cash"},
+          {"section_name": "Weighted Average Rate", "canonical_category": "weighted_average"}
+        ],
+        "requires_verification": [
+          "Exact HTML selectors and table structure",
+          "Buying and selling column mappings",
+          "Currency labels and codes",
+          "Publication date for each table",
+          "Different effective dates between tables",
+          "Behavior when a table is missing or malformed"
+        ]
+      }]
+    },
+    {
+      "bank_code": "ADIB", "bank_name": "Addis International Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "adib_api",
+        "source_url": "https://api.addisbanksc.com/api/exchange-rates",
+        "collection_method": "api", "http_method": "GET",
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified",
+        "is_enabled": false,
+        "known_source_fields": {
+          "id": "id",
+          "currency": "currency",
+          "buying": "buying", "selling": "selling",
+          "transaction_buying": "transactionBuying", "transaction_selling": "transactionSelling",
+          "weighted_buying": "weightedBuying", "weighted_selling": "weightedSelling",
+          "created_at": "createdAt", "updated_at": "updatedAt"
+        },
+        "capture_evidence": "docs/evidence/addis/2026-10-10-exchange-rates.json",
+        "requires_verification": [
+          "Category of plain buying/selling (not assumed cash)",
+          "Zero-value meaning (not offered vs data error)",
+          "updatedAt as effective date",
+          "Stable record identifier (id is row number, not publication id)",
+          "Official-display comparison for at least 3 currencies",
+          "Repeat fetch and empty/error behavior",
+          "HTTP status and headers"
+        ]
+      }]
+    },
+    {
+      "bank_code": "ABAY", "bank_name": "Abay Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "abay_html",
+        "source_url": "https://www.abaybanksc.com/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact exchange-rate page or endpoint", "Response format and table structure", "Currency and rate-category mappings", "Buying and selling columns", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "BOA", "bank_name": "Bank of Abyssinia",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "boa_html",
+        "source_url": "https://www.bankofabyssinia.com/exchange-rate-2/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Actual response and table structure", "Currency code mapping", "Rate categories and buying/selling semantics", "Effective date and update behavior"]
+      }]
+    },
+    {
+      "bank_code": "AHADU", "bank_name": "Ahadu Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "ahadu_html",
+        "source_url": "https://ahadubank.com/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact official exchange-rate page or endpoint", "Static HTML vs dynamically loaded data", "Rate categories and currency fields", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "AMHARA", "bank_name": "Amhara Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "amhara_html",
+        "source_url": "https://www.amharabank.com/daily-exchange-rate/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML table structure", "Currency and rate-category mapping", "Buying and selling columns", "Effective date and missing-value behavior"]
+      }]
+    },
+    {
+      "bank_code": "AWASH", "bank_name": "Awash Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "awash_ajax",
+        "source_url": "https://awashbank.com/wp-admin/admin-ajax.php",
+        "collection_method": "ajax_endpoint", "http_method": "POST",
+        "mapping_status": "endpoint_identified_request_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "notes": "Nonce obtained at run time from official page; never stored (default 15). Lowest priority (Wave 5).",
+        "requires_verification": ["Required action and POST parameters", "How the official page constructs the request", "Required nonce or session values", "Response schema", "Currency and rate-category semantics", "Effective-date extraction", "Endpoint stability"]
+      }]
+    },
+    {
+      "bank_code": "BERHAN", "bank_name": "Berhan Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "berhan_html",
+        "source_url": "https://berhanbanksc.com/exchange-rates/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML structure and selectors", "Currency and category fields", "Buying and selling columns", "Publication date"]
+      }]
+    },
+    {
+      "bank_code": "BUNNA", "bank_name": "Bunna Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "bunna_html",
+        "source_url": "https://bunnabanksc.com/foreign-exchange/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Actual response structure", "Currency and rate-category mappings", "Buying and selling semantics", "Effective-date extraction"]
+      }]
+    },
+    {
+      "bank_code": "CBO", "bank_name": "Cooperative Bank of Oromia",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "cbo_html",
+        "source_url": "https://coopbankoromia.com.et/daily-exchange-rates/",
+        "collection_method": "html", "http_method": "GET",
+        "query_parameters": {"er_date": "YYYY-MM-DD"},
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Whether er_date is supported and how it behaves", "Actual HTML or JSON response structure", "Currency and rate-category fields", "Buying and selling mappings", "Historical-date availability", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "DBE", "bank_name": "Development Bank of Ethiopia",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "dbe_html",
+        "source_url": "https://dbe.com.et/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Whether an official exchange-rate publication exists", "Exact page or endpoint", "Supported rate categories", "Currency and date fields"]
+      }]
+    },
+    {
+      "bank_code": "ENAT", "bank_name": "Enat Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "enat_html",
+        "source_url": "https://www.enatbanksc.com/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact exchange-rate page or endpoint", "Response structure", "Currency and rate-category mappings", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "GADAA", "bank_name": "Gadaa Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "gadaa_html",
+        "source_url": "https://gadaabank.com.et/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact official exchange-rate page or endpoint", "Response format", "Currency and rate categories", "Effective-date extraction"]
+      }]
+    },
+    {
+      "bank_code": "GLOBAL", "bank_name": "Global Bank Ethiopia",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "global_html",
+        "source_url": "https://www.globalbankethiopia.com/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact exchange-rate page or endpoint", "HTML or dynamic response structure", "Currency and rate-category mappings", "Publication-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "GOH_BETOCH", "bank_name": "Goh Betoch Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "goh_betoch_html",
+        "source_url": "https://www.gohbetbank.com/todays-exchange-rate/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML table structure", "Currency and rate-category fields", "Buying and selling columns", "Meaning of today's date", "Behavior when rates are not updated"]
+      }]
+    },
+    {
+      "bank_code": "HIBRET", "bank_name": "Hibret Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "hibret_html",
+        "source_url": "https://www.hibretbank.com.et/about/exchange-rate/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact table structure", "Differences between exchange-rate page and homepage", "Currency and rate-category mappings", "Effective-date semantics", "Missing or stale rate handling"]
+      }]
+    },
+    {
+      "bank_code": "NIB", "bank_name": "Nib International Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "nib_html",
+        "source_url": "https://www.nibbanksc.com/exchange-rate/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML structure and selectors", "Currency and rate-category mappings", "Buying and selling columns", "Effective date"]
+      }]
+    },
+    {
+      "bank_code": "OMO", "bank_name": "Omo Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "omo_html",
+        "source_url": "https://omobanksc.com/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact exchange-rate page or endpoint", "Response structure", "Currency and rate-category mappings", "Publication-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "OROMIA", "bank_name": "Oromia Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "oromia_ajax",
+        "source_url": "https://oromiabank.com/wp-admin/admin-ajax.php",
+        "collection_method": "ajax_endpoint", "http_method": "POST",
+        "mapping_status": "endpoint_identified_request_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "notes": "Nonce obtained at run time from official page; never stored (default 15). Lowest priority (Wave 5).",
+        "known_request_parameters": {
+          "action": "wp_ajax_ninja_tables_public_action",
+          "table_id": "8233",
+          "target_action": "get-all-data",
+          "default_sorting": "old_first",
+          "skip_rows": 0, "limit_rows": 0, "chunk_number": 0,
+          "ninja_table_public_nonce": "DYNAMIC_OBTAIN_AT_RUNTIME"
+        },
+        "requires_verification": ["Actual current table ID", "How the official page obtains the nonce", "Required POST parameters", "Actual response schema", "Currency and rate-category mappings", "Effective-date semantics", "Pagination and ordering behavior"]
+      }]
+    },
+    {
+      "bank_code": "RAMMIS", "bank_name": "Rammis Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "rammis_api",
+        "source_url": "https://rammisbank.et/api/v1/exchange-rates/latest?base_currency=ETB",
+        "collection_method": "api", "http_method": "GET",
+        "query_parameters": {"base_currency": "ETB"},
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Actual response schema and field types", "Currency orientation and base-currency semantics", "Buying and selling definitions", "Rate categories", "Effective-date semantics", "Consistency with the official visible page"]
+      }]
+    },
+    {
+      "bank_code": "SIDAMA", "bank_name": "Sidama Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "sidama_html",
+        "source_url": "https://sidamabanksc.com/exchange-rate/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML table structure", "Currency and rate-category mappings", "Buying and selling columns", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "SIINQEE", "bank_name": "Siinqee Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "siinqee_html",
+        "source_url": "https://siinqeebank.com/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact exchange-rate page or endpoint", "Response structure", "Currency and rate-category mappings", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "SIKET", "bank_name": "Siket Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "siket_html",
+        "source_url": "https://siketbank.com/exchange-rate",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML structure and selectors", "Currency and rate-category fields", "Buying and selling columns", "Effective-date extraction"]
+      }]
+    },
+    {
+      "bank_code": "TSEDEY", "bank_name": "Tsedey Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "tsedey_html",
+        "source_url": "https://www.tsedeybank.com.et/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Exact exchange-rate page or endpoint", "Response structure", "Currency and rate-category mappings", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "TSEHAY", "bank_name": "Tsehay Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "tsehay_html",
+        "source_url": "https://tsehaybank.com.et/exchange-rate/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML table structure", "Currency and rate-category mappings", "Buying and selling columns", "Effective-date extraction"]
+      }]
+    },
+    {
+      "bank_code": "WEGAGEN", "bank_name": "Wegagen Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "wegagen_api",
+        "source_url": "https://weg.back.strapi.wegagen.com/api/exchange-rates?populate=*",
+        "collection_method": "api", "http_method": "GET",
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Actual JSON schema and nested fields", "Currency and rate-category mappings", "Buying and selling semantics", "Effective-date extraction", "Intermittent failure handling", "Consistency with the official published page"]
+      }]
+    },
+    {
+      "bank_code": "ZAMZAM", "bank_name": "ZamZam Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "zamzam_html",
+        "source_url": "https://zamzambank.com/exchange-rates/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "source_identified_schema_unverified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["HTML structure and selectors", "Currency and rate-category mappings", "Buying and selling columns", "Effective-date semantics"]
+      }]
+    },
+    {
+      "bank_code": "ZEMEN", "bank_name": "Zemen Bank",
+      "source_authority": "official", "is_active": true,
+      "sources": [{
+        "adapter_key": "zemen_html",
+        "source_url": "https://zemenbank.com/exchange-rates/",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "partially_verified",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Underlying AJAX request and request parameters", "Actual response schema", "Transaction, cash, and weighted-average table mapping", "Currency and buying/selling fields", "Effective-date semantics", "Consistency between visible page and returned data"]
+      }]
+    },
+    {
+      "bank_code": "ANBESA", "bank_name": "Anbesa International Bank",
+      "source_authority": "third_party", "is_active": false,
+      "notes": "No official source established. Third-party mirror only. Disabled by default (default 2). Never feeds trusted view.",
+      "sources": [{
+        "adapter_key": "anbesa_mirror",
+        "source_url": "https://kehulum.com/exchange-rate/lion--anbesa-international-bank-sc-114",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "official_source_unresolved",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Identify the bank's official exchange-rate publication", "Determine whether an official API or webpage exists", "Do not use the mirror as authoritative without an explicit fallback policy"]
+      }]
+    },
+    {
+      "bank_code": "SHABELLE", "bank_name": "Shabelle Bank",
+      "source_authority": "third_party", "is_active": false,
+      "notes": "No official source established. Third-party mirror only. Disabled by default (default 2). Never feeds trusted view.",
+      "sources": [{
+        "adapter_key": "shabelle_mirror",
+        "source_url": "https://kehulum.com/exchange-rate/shabelle-bank-sc-129",
+        "collection_method": "html", "http_method": "GET",
+        "mapping_status": "official_source_unresolved",
+        "verification_status": "unverified", "is_enabled": false,
+        "requires_verification": ["Identify the bank's official exchange-rate publication", "Determine whether an official API or webpage exists", "Do not use the mirror as authoritative without an explicit fallback policy"]
+      }]
+    },
+    {
+      "bank_code": "HIJRA", "bank_name": "Hijra Bank",
+      "source_authority": "official", "is_active": false,
+      "mapping_status": "official_source_unresolved",
+      "notes": "No sources identified. Status recorded at bank level per waves.md observation.",
+      "sources": [],
+      "requires_verification": ["Identify the official exchange-rate page or API", "Confirm whether exchange rates are publicly published", "Determine the available rate categories and effective-date semantics"]
+    }
+  ]
+}
