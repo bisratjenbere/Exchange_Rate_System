@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ethiopian Bank Exchange Rates</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f4f6f9; color: #1a1a1a; font-size: 0.9rem; }
+
+    /* ── header ── */
+    header { background: #1a3a5c; color: #fff; padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    header h1 { font-size: 1.05rem; font-weight: 700; flex: 1; white-space: nowrap; }
+    .search-wrap { display: flex; gap: 0.4rem; flex: 1; max-width: 380px; }
+    .search-wrap input {
+      flex: 1; padding: 0.35rem 0.7rem; border: none; border-radius: 4px;
+      font-size: 0.85rem; background: rgba(255,255,255,0.15); color: #fff;
+      outline: none;
+    }
+    .search-wrap input::placeholder { color: rgba(255,255,255,0.55); }
+    .search-wrap input:focus { background: rgba(255,255,255,0.25); }
+    .search-wrap button {
+      padding: 0.35rem 0.8rem; background: #e8a020; color: #fff;
+      border: none; border-radius: 4px; font-size: 0.82rem; cursor: pointer; white-space: nowrap;
+    }
+    .search-wrap button:hover { background: #d4911a; }
+    .updated { font-size: 0.72rem; opacity: 0.6; white-space: nowrap; }
+
+    /* ── nav ── */
+    nav { background: #fff; border-bottom: 2px solid #e8edf2; padding: 0 1.5rem; display: flex; gap: 0; }
+    nav a { display: inline-block; padding: 0.7rem 1.2rem; text-decoration: none; color: #666; border-bottom: 3px solid transparent; font-size: 0.85rem; font-weight: 500; margin-bottom: -2px; }
+    nav a.active { color: #1a3a5c; border-bottom-color: #1a3a5c; }
+    nav a:hover { color: #1a3a5c; }
+
+    /* ── toolbar ── */
+    .toolbar { background: #fff; border-bottom: 1px solid #e8edf2; padding: 0.55rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .toolbar-group { display: flex; align-items: center; gap: 0.5rem; }
+    .toolbar label { font-size: 0.78rem; color: #888; font-weight: 500; }
+    .toolbar select { padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; background: #fff; cursor: pointer; }
+    .filter-toggle { display: flex; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }
+    .filter-toggle a { padding: 0.28rem 0.7rem; font-size: 0.78rem; text-decoration: none; color: #555; background: #fff; }
+    .filter-toggle a.active { background: #1a3a5c; color: #fff; }
+    .toolbar-right { margin-left: auto; font-size: 0.78rem; color: #999; }
+
+    /* ── main ── */
+    main { padding: 1.25rem 1.5rem; }
+    .error { color: #c0392b; background: #fdf0ef; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
+    .empty { color: #888; padding: 3rem 0; text-align: center; font-size: 0.95rem; }
+    .summary { margin-top: 0.6rem; font-size: 0.75rem; color: #aaa; }
+
+    /* ── card wrapper ── */
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); overflow: hidden; }
+
+    /* ── compare view: ranked bars ── */
+    .rank-list { list-style: none; }
+    .rank-item {
+      display: grid;
+      grid-template-columns: 2rem 1fr 7rem 7rem 6rem;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid #f0f2f5;
+    }
+    .rank-item:last-child { border-bottom: none; }
+    .rank-item:hover { background: #fafbfc; }
+    .rank-item.best { background: #f0faf3; }
+    .rank-pos { font-size: 0.8rem; color: #bbb; font-weight: 700; text-align: center; }
+    .rank-pos.gold   { color: #d4a017; }
+    .rank-pos.silver { color: #9e9e9e; }
+    .rank-pos.bronze { color: #cd7f32; }
+    .rank-bank { font-weight: 600; font-size: 0.88rem; }
+    .rank-bank small { display: block; font-weight: 400; font-size: 0.72rem; color: #999; margin-top: 0.1rem; }
+    .rank-bar-wrap { position: relative; height: 8px; background: #eef0f3; border-radius: 4px; overflow: hidden; }
+    .rank-bar { height: 100%; border-radius: 4px; background: #3a7bd5; transition: width 0.3s; }
+    .rank-item.best .rank-bar { background: #27ae60; }
+    .rank-buying { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.92rem; text-align: right; }
+    .rank-item.best .rank-buying { color: #1a7a3a; }
+    .rank-selling { font-variant-numeric: tabular-nums; font-size: 0.82rem; color: #888; text-align: right; }
+    .rank-meta { font-size: 0.72rem; color: #bbb; text-align: right; }
+
+    /* ── compare header ── */
+    .compare-header {
+      display: grid;
+      grid-template-columns: 2rem 1fr 7rem 7rem 6rem;
+      gap: 0.5rem;
+      padding: 0.45rem 1rem;
+      background: #f7f9fb;
+      border-bottom: 1px solid #e8edf2;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .compare-header span:nth-child(4),
+    .compare-header span:nth-child(5) { text-align: right; }
+
+    /* ── by-bank view ── */
+    .bank-header { padding: 1rem 1.25rem; border-bottom: 1px solid #f0f2f5; }
+    .bank-header h2 { font-size: 1rem; font-weight: 700; color: #1a3a5c; }
+    .bank-meta { font-size: 0.75rem; color: #999; margin-top: 0.25rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+    .bank-meta .fresh { color: #27ae60; }
+    .bank-meta .stale { color: #e74c3c; }
+
+    .pivot-table { width: 100%; border-collapse: collapse; }
+    .pivot-table th {
+      background: #f7f9fb; color: #666; font-size: 0.72rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 0.5rem 0.75rem; text-align: right; border-bottom: 1px solid #e8edf2;
+    }
+    .pivot-table th:first-child { text-align: left; }
+    .pivot-table td { padding: 0.45rem 0.75rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+    .pivot-table td:first-child { text-align: left; font-weight: 600; color: #333; }
+    .pivot-table tr:last-child td { border-bottom: none; }
+    .pivot-table tr:hover td { background: #fafbfc; }
+    .pivot-table .na { color: #ddd; font-size: 0.75rem; }
+    .pivot-table .buy { color: #1a3a5c; }
+    .pivot-table .sell { color: #888; font-size: 0.78rem; }
+    .show-all-wrap { padding: 0.75rem 1rem; text-align: center; border-top: 1px solid #f0f2f5; }
+    .show-all-wrap a { font-size: 0.8rem; color: #3a7bd5; text-decoration: none; }
+    .show-all-wrap a:hover { text-decoration: underline; }
+
+    /* ── all-rates matrix ── */
+    .matrix-wrap { overflow-x: auto; }
+    .matrix-table { width: 100%; border-collapse: collapse; min-width: 600px; }
+    .matrix-table th {
+      background: #f7f9fb; color: #666; font-size: 0.7rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.03em;
+      padding: 0.5rem 0.6rem; text-align: right; border-bottom: 1px solid #e8edf2;
+      white-space: nowrap;
+    }
+    .matrix-table th:first-child { text-align: left; position: sticky; left: 0; background: #f7f9fb; z-index: 1; }
+    .matrix-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.82rem; white-space: nowrap; }
+    .matrix-table td:first-child { text-align: left; font-weight: 700; position: sticky; left: 0; background: #fff; z-index: 1; }
+    .matrix-table tr:hover td { background: #fafbfc; }
+    .matrix-table tr:hover td:first-child { background: #fafbfc; }
+    .matrix-table .best-cell { background: #f0faf3 !important; color: #1a7a3a; font-weight: 700; }
+    .matrix-table .na-cell { color: #e0e0e0; font-size: 0.72rem; }
+
+    /* ── history view ── */
+    .hist-date-group { margin-bottom: 1.5rem; }
+    .hist-date-heading {
+      font-size: 0.8rem; font-weight: 700; color: #1a3a5c;
+      padding: 0.5rem 1rem; background: #f0f4f8;
+      border-bottom: 1px solid #e8edf2; letter-spacing: 0.03em;
+      display: flex; align-items: center; gap: 0.75rem;
+    }
+    .hist-date-heading .day-count { font-weight: 400; color: #999; font-size: 0.72rem; }
+    .hist-table { width: 100%; border-collapse: collapse; }
+    .hist-table th {
+      background: #f7f9fb; color: #666; font-size: 0.72rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 0.45rem 0.75rem; text-align: right; border-bottom: 1px solid #e8edf2;
+    }
+    .hist-table th:first-child { text-align: left; }
+    .hist-table td { padding: 0.4rem 0.75rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+    .hist-table td:first-child { text-align: left; font-weight: 600; color: #333; }
+    .hist-table tr:last-child td { border-bottom: none; }
+    .hist-table tr:hover td { background: #fafbfc; }
+    .hist-table .best-row td:first-child { color: #1a7a3a; }
+    .hist-table .buy { color: #1a3a5c; font-weight: 600; }
+    .hist-table .sell { color: #888; }
+    .hist-table .na { color: #ddd; }
+    .change-up   { color: #27ae60; font-size: 0.75rem; }
+    .change-down { color: #e74c3c; font-size: 0.75rem; }
+    .change-flat { color: #bbb;    font-size: 0.75rem; }
+
+    /* ── badges ── */
+    .badge { display: inline-block; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.02em; vertical-align: middle; }
+    .provisional { background: #fff3cd; color: #856404; }
+    .pending     { background: #cfe2ff; color: #084298; }
+    .stale       { background: #f8d7da; color: #842029; }
+  </style>
+</head>
+<body>
+
+<!-- ── header ── -->
+<header>
+  <h1>🇪🇹 Ethiopian Bank Exchange Rates</h1>
+  <form method="get" class="search-wrap" action="/">
+    <input type="hidden" name="view" value="{{ view }}">
+    {% if view == 'bank' and source_id %}<input type="hidden" name="source_id" value="{{ source_id }}">{% endif %}
+    <input
+      type="search" name="q" value="{{ q }}"
+      placeholder="Search currency or bank…"
+      list="search-suggestions"
+      autocomplete="off"
+    >
+    <datalist id="search-suggestions">
+      {% for c in suggestions.currencies %}<option value="{{ c }}">{% endfor %}
+      {% for b in suggestions.banks %}<option value="{{ b.name }}">{% endfor %}
+    </datalist>
+    <button type="submit">Search</button>
+  </form>
+  <span class="updated">{{ now.strftime('%d %b %Y, %H:%M UTC') }}</span>
+</header>
+
+<!-- ── nav ── -->
+<nav>
+  <a href="/?view=compare&currency={{ currency }}&filter={{ filt }}"
+     class="{{ 'active' if view == 'compare' }}">Compare Banks</a>
+  <a href="/?view=bank{% if source_id %}&source_id={{ source_id }}{% endif %}&filter={{ filt }}"
+     class="{{ 'active' if view == 'bank' }}">By Bank</a>
+  <a href="/?view=all&filter={{ filt }}"
+     class="{{ 'active' if view == 'all' }}">All Rates</a>
+  <a href="/?view=history&currency={{ currency }}"
+     class="{{ 'active' if view == 'history' }}">History</a>
+</nav>
+
+<!-- ── toolbar ── -->
+<div class="toolbar">
+
+  {% if view == "compare" %}
+  <div class="toolbar-group">
+    <label for="cur">Currency</label>
+    <form method="get" style="display:contents">
+      <input type="hidden" name="view" value="compare">
+      <input type="hidden" name="filter" value="{{ filt }}">
+      <select id="cur" name="currency" onchange="this.form.submit()">
+        {% for c in currencies %}
+          <option value="{{ c }}" {{ 'selected' if c == currency }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  {% elif view == "bank" %}
+  <div class="toolbar-group">
+    <label for="bank-sel">Bank</label>
+    <form method="get" style="display:contents">
+      <input type="hidden" name="view" value="bank">
+      <input type="hidden" name="filter" value="{{ filt }}">
+      <select id="bank-sel" name="source_id" onchange="this.form.submit()">
+        <option value="">— select bank —</option>
+        {% for b in banks %}
+          <option value="{{ b.id }}" {{ 'selected' if b.id == source_id }}>{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  {% elif view == "history" %}
+  <div class="toolbar-group">
+    <label for="hist-cur">Currency</label>
+    <form method="get" style="display:contents">
+      <input type="hidden" name="view" value="history">
+      <select id="hist-cur" name="currency" onchange="this.form.submit()">
+        {% for c in currencies %}
+          <option value="{{ c }}" {{ 'selected' if c == currency }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+  <div class="toolbar-group">
+    <label for="hist-date">Date</label>
+    <form method="get" style="display:contents">
+      <input type="hidden" name="view" value="history">
+      <input type="hidden" name="currency" value="{{ currency }}">
+      <select id="hist-date" name="date" onchange="this.form.submit()">
+        <option value="">All dates</option>
+        {% for d in dates %}
+          <option value="{{ d.isoformat() }}" {{ 'selected' if sel_date == d }}>{{ d.strftime('%d %b %Y') }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+  {% endif %}
+
+  <!-- major / all filter (bank + all views) -->
+  {% if view in ('bank', 'all') %}
+  <div class="toolbar-group">
+    <label>Show</label>
+    <div class="filter-toggle">
+      <a href="?view={{ view }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter=major{% if q %}&q={{ q }}{% endif %}"
+         class="{{ 'active' if filt == 'major' }}">Major</a>
+      <a href="?view={{ view }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter=all{% if q %}&q={{ q }}{% endif %}"
+         class="{{ 'active' if filt == 'all' }}">All</a>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if q %}
+  <div class="toolbar-group">
+    <span style="font-size:0.78rem;color:#888">Filtered: <strong>{{ q }}</strong></span>
+    <a href="?view={{ view }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter={{ filt }}"
+       style="font-size:0.75rem;color:#e74c3c;text-decoration:none">✕ clear</a>
+  </div>
+  {% endif %}
+
+  <div class="toolbar-right">
+    {% if view == "compare" %}{{ rows|length }} bank(s)
+    {% elif view == "bank" and bank_data %}{{ total_currencies }} currencies
+    {% elif view == "all" and matrix %}{{ matrix.currencies|length }} currencies × {{ matrix.banks|length }} banks
+    {% elif view == "history" %}{{ hist_by_date|length }} date(s) &middot; {{ currency }}
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── main content ── -->
+<main>
+{% if error %}
+  <div class="error">⚠ {{ error }}</div>
+
+{% elif view == "compare" %}
+<!-- ════════════════════════════════════════════════════════ COMPARE VIEW -->
+{% if not rows %}
+  <p class="empty">No trusted rates for {{ currency }}.</p>
+{% else %}
+<div class="card">
+  <div class="compare-header">
+    <span>#</span><span>Bank</span><span>Buying ↑</span><span>Selling</span><span>Date</span>
+  </div>
+  <ul class="rank-list">
+  {% for r in rows %}
+    {% set pct = ((r.buying_rate / max_buying * 100) | round(1)) if max_buying and r.buying_rate else 0 %}
+    {% set is_best = loop.index == 1 %}
+    <li class="rank-item {{ 'best' if is_best }}">
+      <span class="rank-pos {{ 'gold' if loop.index==1 else 'silver' if loop.index==2 else 'bronze' if loop.index==3 else '' }}">
+        {{ loop.index }}
+      </span>
+      <div class="rank-bank">
+        {{ r.bank_name }}
+        <small>
+          {{ r.category }}
+          {% if r.is_provisional %}<span class="badge provisional">PROVISIONAL</span>{% endif %}
+          {% if r.staleness_warning %}<span class="badge stale">STALE</span>{% endif %}
+        </small>
+        <div class="rank-bar-wrap" style="margin-top:0.3rem">
+          <div class="rank-bar" style="width:{{ pct }}%"></div>
+        </div>
+      </div>
+      <span class="rank-buying">{{ r.buying_rate }}</span>
+      <span class="rank-selling">{{ r.selling_rate or '—' }}</span>
+      <span class="rank-meta">
+        {{ r.effective_date.strftime('%d %b') if r.effective_date else '—' }}
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+</div>
+<p class="summary">
+  {{ rows|length }} bank(s) offering {{ currency }}.
+  Ranked by best buying rate (you sell {{ currency }}, receive ETB).
+</p>
+{% endif %}
+
+{% elif view == "bank" %}
+<!-- ════════════════════════════════════════════════════════ BY-BANK VIEW -->
+{% if not source_id %}
+  <p class="empty">Select a bank from the toolbar above.</p>
+{% elif not bank_data or not bank_data.currencies %}
+  <p class="empty">No trusted rates for this bank{% if filt == 'major' %} in major currencies — <a href="?view=bank&source_id={{ source_id }}&filter=all">show all</a>{% endif %}.</p>
+{% else %}
+  {% set cats = bank_data.categories %}
+  {% set cur_items = bank_data.currencies.items() | list %}
+  {% set visible = cur_items if show_all else cur_items[:page_size] %}
+
+  <div class="card">
+    <div class="bank-header">
+      <h2>{{ bank_data.bank_name }}</h2>
+      <div class="bank-meta">
+        <span>{{ total_currencies }} currencies</span>
+        {% if bank_data.latest_date %}
+          <span class="{{ 'stale' if bank_data.staleness_warning else 'fresh' }}">
+            Effective: {{ bank_data.latest_date.strftime('%d %b %Y') }}
+          </span>
+        {% endif %}
+        {% if bank_data.latest_fetch %}
+          <span>Fetched: {{ bank_data.latest_fetch.strftime('%d %b %H:%M') }} UTC</span>
+        {% endif %}
+        {% if bank_data.is_provisional %}
+          <span class="badge provisional">PROVISIONAL</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <table class="pivot-table">
+      <thead>
+        <tr>
+          <th>Currency</th>
+          {% for cat in cats %}
+            <th>{{ cat }} Buy</th>
+            <th>{{ cat }} Sell</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+      {% for cur, cat_data in visible %}
+        <tr>
+          <td>{{ cur }}</td>
+          {% for cat in cats %}
+            {% if cat in cat_data %}
+              <td class="buy">{{ cat_data[cat].buying or '—' }}</td>
+              <td class="sell">{{ cat_data[cat].selling or '—' }}</td>
+            {% else %}
+              <td class="na">—</td><td class="na">—</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    {% if paginated %}
+    <div class="show-all-wrap">
+      <a href="?view=bank&source_id={{ source_id }}&filter={{ filt }}&show_all=1">
+        Show all {{ total_currencies }} currencies ↓
+      </a>
+    </div>
+    {% endif %}
+  </div>
+  <p class="summary">
+    Showing {{ visible|length }} of {{ total_currencies }} currencies.
+    {% if filt == 'major' %}<a href="?view=bank&source_id={{ source_id }}&filter=all">Show all currencies</a>{% endif %}
+  </p>
+{% endif %}
+
+{% elif view == "all" %}
+<!-- ════════════════════════════════════════════════════════ ALL RATES MATRIX -->
+{% if not matrix or not matrix.currencies %}
+  <p class="empty">No trusted rates available{% if filt == 'major' %} for major currencies — <a href="?view=all&filter=all">show all</a>{% endif %}.</p>
+{% else %}
+<div class="card matrix-wrap">
+  <table class="matrix-table">
+    <thead>
+      <tr>
+        <th>Currency</th>
+        {% for bank in matrix.banks %}
+          <th>{{ bank.split()[0] }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+    {% for cur in matrix.currencies %}
+      <tr>
+        <td>
+          <a href="/?view=compare&currency={{ cur }}&filter={{ filt }}"
+             style="color:inherit;text-decoration:none">{{ cur }}</a>
+        </td>
+        {% for bank in matrix.banks %}
+          {% set cell = matrix.matrix.get(cur, {}).get(bank) %}
+          {% if cell and cell.buying %}
+            {% set is_best = cell.buying == matrix.best_buying.get(cur) %}
+            <td class="{{ 'best-cell' if is_best }}">
+              {{ cell.buying }}
+            </td>
+          {% else %}
+            <td class="na-cell">—</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="summary">
+  Buying rates only. Green = best rate for that currency.
+  Click a currency to compare all banks.
+  {% if filt == 'major' %}<a href="?view=all&filter=all">Show all {{ matrix.currencies|length }} currencies</a>{% endif %}
+</p>
+{% endif %}
+
+{% elif view == "history" %}
+<!-- ════════════════════════════════════════════════════════ HISTORY VIEW -->
+{% if not hist_by_date %}
+  <p class="empty">No historical data for {{ currency }}{% if sel_date %} on {{ sel_date.strftime('%d %b %Y') }}{% endif %}.</p>
+{% else %}
+  {% for eff_date, day_rows in hist_by_date.items() | sort(reverse=true) %}
+    {% set best_buy = namespace(val=None) %}
+    {% for r in day_rows %}{% if r.buying_rate and (best_buy.val is none or r.buying_rate > best_buy.val) %}{% set best_buy.val = r.buying_rate %}{% endif %}{% endfor %}
+    <div class="hist-date-group">
+      <div class="card">
+        <div class="hist-date-heading">
+          {{ eff_date.strftime('%A, %d %B %Y') }}
+          <span class="day-count">{{ day_rows|length }} bank(s)</span>
+        </div>
+        <table class="hist-table">
+          <thead>
+            <tr>
+              <th>Bank</th>
+              <th>Category</th>
+              <th>Buying</th>
+              <th>Selling</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for r in day_rows %}
+            {% set is_best = r.buying_rate and r.buying_rate == best_buy.val %}
+            <tr class="{{ 'best-row' if is_best }}">
+              <td>{{ r.bank_name }}{% if is_best %} ★{% endif %}</td>
+              <td style="text-align:left;color:#999;font-size:0.78rem">{{ r.category or '—' }}</td>
+              <td class="buy">{{ r.buying_rate or '—' }}</td>
+              <td class="sell">{{ r.selling_rate or '—' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endfor %}
+  <p class="summary">
+    {{ currency }} historical rates. ★ = best buying rate for that date.
+    {% if sel_date %}<a href="?view=history&currency={{ currency }}">Show all dates</a>{% endif %}
+  </p>
+{% endif %}
+
+{% endif %}
+</main>
+
+</body>
+</html>
