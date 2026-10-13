@@ -1,0 +1,55 @@
+{
+  "data": [
+    {
+      "id": 1,
+      "attributes": {
+        "date": "2026-10-08",
+        "code": "USD",
+        "unit": 1,
+        "buying": 161.7253,
+        "selling": 164.9598,
+        "tra_buying": 161.7253,
+        "tra_selling": 164.9598,
+        "createdAt": "2024-08-06T07:40:29.494Z",
+        "updatedAt": "2026-10-08T06:11:22.527Z",
+        "publishedAt": "2024-08-06T07:42:55.377Z",
+        "flag": {"data": []}
+      }
+    },
+    {
+      "id": 2,
+      "attributes": {
+        "date": "2026-10-08",
+        "code": "GBP",
+        "unit": 1,
+        "buying": 213.5744,
+        "selling": 217.8459,
+        "tra_buying": 213.5744,
+        "tra_selling": 217.8459,
+        "createdAt": "2024-08-06T12:46:20.489Z",
+        "updatedAt": "2026-10-08T06:08:47.362Z",
+        "publishedAt": "2024-08-06T12:46:24.301Z",
+        "flag": {"data": []}
+      }
+    },
+    {
+      "id": 4,
+      "attributes": {
+        "date": "2026-10-07",
+        "code": "CHF",
+        "unit": 1,
+        "buying": 194.1027,
+        "selling": 197.9848,
+        "tra_buying": 194.1027,
+        "tra_selling": 197.9848,
+        "createdAt": "2024-08-06T12:48:22.634Z",
+        "updatedAt": "2026-10-07T06:58:37.525Z",
+        "publishedAt": "2024-12-14T06:28:24.494Z",
+        "flag": {"data": []}
+      }
+    }
+  ],
+  "meta": {
+    "pagination": {"page": 1, "pageSize": 25, "pageCount": 1, "total": 3}
+  }
+}

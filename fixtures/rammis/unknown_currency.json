@@ -1,0 +1,8 @@
+{
+  "base_currency": "ETB",
+  "effective_date": "2026-10-10",
+  "rates": [
+    {"id": 9, "base_currency": "ETB", "currency": "USD", "effective_date": "2026-10-10", "buying": "161.356300", "selling": "164.583400", "created_at": "2025-11-25T05:42:46.988873Z"},
+    {"id": 99, "base_currency": "ETB", "currency": "XYZ", "effective_date": "2026-10-10", "buying": "10.000000", "selling": "11.000000", "created_at": "2025-11-25T05:42:46.988873Z"}
+  ]
+}

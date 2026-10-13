@@ -1,0 +1,896 @@
+{
+  "RAMMIS": {
+    "status": 200,
+    "type": "json",
+    "shape": "object keys=['base_currency', 'effective_date', 'rates']",
+    "keys": [
+      "base_currency",
+      "effective_date",
+      "rates"
+    ],
+    "ts": "2026-10-10T07:33:38.704244+00:00"
+  },
+  "WEGAGEN": {
+    "status": 200,
+    "type": "json",
+    "shape": "object keys=['data', 'meta']",
+    "keys": [
+      "data",
+      "meta"
+    ],
+    "ts": "2026-10-10T07:33:40.550336+00:00"
+  },
+  "ZEMEN": {
+    "status": 200,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [
+      "https://zemenbank.com/exchange-rates/",
+      "https://zemenbank.com/personal-banking-2/foreign-currency-fcy-accounts/",
+      "https://zemenbank.com/international-banking-2/forex-service/",
+      "https://zemenbank.com/business-banking/",
+      "https://zemenbank.com/personal-banking-2/foreign-currency-fcy-accounts/"
+    ],
+    "rate_text_lines": [
+      "USD",
+      "EUR",
+      "GBP",
+      "Buying: --"
+    ],
+    "ts": "2026-10-10T07:33:42.909773+00:00",
+    "table_summary": []
+  },
+  "CBO": {
+    "status": 200,
+    "type": "html",
+    "tables": 2,
+    "rate_links": [
+      "https://coopbankoromia.com.et/daily-exchange-rates/",
+      "https://coopbankoromia.com.et/brand-identity/",
+      "https://coopbankoromia.com.et/international-banking-2/guarantee-foreign/",
+      "https://coopbankoromia.com.et/diaspora-banking/ethiopian-citizen-or-origin-living-in-foreign-land-ecolfl-savings-account/",
+      "https://coopbankoromia.com.et/interest-free-deposit-products/#ifb-foreign-currency-deposit-products"
+    ],
+    "rate_text_lines": [
+      "USD - US Dollar",
+      "GBP - Pound Sterling",
+      "EUR - Euro",
+      "Cash Buying"
+    ],
+    "ts": "2026-10-10T07:33:45.924749+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 8,
+        "headers": [
+          "Exchange RateOctober 10, 2026"
+        ],
+        "sample": [
+          [
+            "Currency",
+            "Cash",
+            "Transaction"
+          ],
+          [
+            "Buying",
+            "Selling",
+            "Buying",
+            "Selling"
+          ],
+          [
+            "USD - US Dollar",
+            "160.8853",
+            "164.1030",
+            "160.8853",
+            "164.1030"
+          ]
+        ]
+      },
+      {
+        "index": 1,
+        "rows": 9,
+        "headers": [
+          "Currency",
+          "Weighted Average Rate"
+        ],
+        "sample": [
+          [
+            "",
+            "Buying",
+            "Selling"
+          ],
+          [
+            "USD - US Dollar",
+            "163.5992",
+            "164.0979"
+          ],
+          [
+            "GBP - Pound Sterling",
+            "-",
+            "-"
+          ]
+        ]
+      }
+    ]
+  },
+  "HIBRET": {
+    "status": "ERROR",
+    "error": "HTTPSConnectionPool(host='www.hibretbank.com.et', port=443): Max retries exceeded with url: /about/exchange-rate/ (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1000)')))"
+  },
+  "AMHARA": {
+    "status": "ERROR",
+    "error": "HTTPSConnectionPool(host='www.amharabank.com', port=443): Max retries exceeded with url: /daily-exchange-rate/ (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1000)')))"
+  },
+  "BERHAN": {
+    "status": 200,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [
+      "https://berhanbanksc.com/foreign-cash-purchase-3/",
+      "https://berhanbanksc.com/international-banking/forex-bureau-service/",
+      "https://berhanbanksc.com/forex-bureau-service/",
+      "https://berhanbanksc.com/international-banking/foreign-currency-saving-account/",
+      "https://berhanbanksc.com/foreign-cash-purchase-3/"
+    ],
+    "rate_text_lines": [
+      "Buying",
+      "Selling",
+      "1 USD ($)",
+      "1 EUR (\u20ac)"
+    ],
+    "ts": "2026-10-10T07:33:53.187915+00:00",
+    "table_summary": []
+  },
+  "BUNNA": {
+    "status": 200,
+    "type": "html",
+    "tables": 1,
+    "rate_links": [
+      "https://bunnabanksc.com/corporate-social-responsibilities/",
+      "https://bunnabanksc.com/corporate-social-responsibilities/",
+      "https://bunnabanksc.com/corporate-social-responsibilities/"
+    ],
+    "rate_text_lines": [
+      "Buying",
+      "Selling",
+      "Buying",
+      "Selling"
+    ],
+    "ts": "2026-10-10T07:33:55.682445+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 10,
+        "headers": [
+          "",
+          "CASH",
+          "TRANSACTION",
+          "AVERAGE"
+        ],
+        "sample": [
+          [
+            "Currency",
+            "Code",
+            "Buying",
+            "Selling",
+            "Buying",
+            "Selling",
+            "Buying",
+            "Selling"
+          ],
+          [
+            "US Dollar",
+            "USD",
+            "164.3201",
+            "167.6065",
+            "161.6865",
+            "164.9202",
+            "...",
+            "..."
+          ],
+          [
+            "Euro",
+            "EUR",
+            "190.2415",
+            "194.0463",
+            "187.5051",
+            "191.2552",
+            "...",
+            "..."
+          ]
+        ]
+      }
+    ]
+  },
+  "BOA": {
+    "status": "ERROR",
+    "error": "HTTPSConnectionPool(host='www.bankofabyssinia.com', port=443): Max retries exceeded with url: /exchange-rate-2/ (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1000)')))"
+  },
+  "GOH_BETOCH": {
+    "status": 200,
+    "type": "html",
+    "tables": 1,
+    "rate_links": [
+      "https://www.gohbetbank.com/corporate-profile/",
+      "https://www.gohbetbank.com/corporate-governance/",
+      "https://www.gohbetbank.com/corporate-profile/",
+      "https://www.gohbetbank.com/corporate-governance/",
+      "/yesterdays-exchange-rate/"
+    ],
+    "rate_text_lines": [
+      "Currency cODECurrency NamebuyingSELLINGWeighted Average\u00a0Buying RateWeighted Average\u00a0Selling RateUSDUS Dollar161.7128164.9471163.9699166.4471EUREURO\u00a0186.2605189.9857186.2605189.9857GBPPound Sterling213.8209218.0973213.8209218.0973AEDUAE Dirham43.8917 44.769543.891744.7695"
+    ],
+    "ts": "2026-10-10T07:33:58.625307+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 5,
+        "headers": [
+          "Currency cODE",
+          "Currency Name",
+          "buying",
+          "SELLING",
+          "Weighted AverageBuying Rate",
+          "Weighted AverageSelling Rate"
+        ],
+        "sample": [
+          [
+            "USD",
+            "US Dollar",
+            "161.7128",
+            "164.9471",
+            "163.9699",
+            "166.4471"
+          ],
+          [
+            "EUR",
+            "EURO",
+            "186.2605",
+            "189.9857",
+            "186.2605",
+            "189.9857"
+          ],
+          [
+            "GBP",
+            "Pound Sterling",
+            "213.8209",
+            "218.0973",
+            "213.8209",
+            "218.0973"
+          ]
+        ]
+      }
+    ]
+  },
+  "NIB": {
+    "status": 200,
+    "type": "html",
+    "tables": 3,
+    "rate_links": [
+      "https://www.nibbank.com.et/NIBCorporate/servletcontroller",
+      "https://www.nibbank.com.et/NIBCorporate/servletcontroller",
+      "https://www.nibbanksc.com/firex-service/",
+      "https://www.nibbanksc.com/forex-bureaus/"
+    ],
+    "rate_text_lines": [
+      "CountryCurrencyBuyingSellingBuyingSellingUSD160.9077164.1259160.9077164.1259GBP213.6693217.9427213.6693217.9427EUR187.2644191.0097187.2644191.0097CHF192.6346196.4873192.6346196.4873CAD113.3792115.6467113.3792115.6467AED43.810644.686843.810644.6868SAR42.851643.708642.851643.7086",
+      "Weighted Average Buying and Selling Rates",
+      "CountryCurrencyBuyingSellingUSD",
+      "167.0678168.3352GBPNo TradeNo TradeEURNo Trade194.7032CHFNo TradeNo TradeCADNo TradeNo TradeAED46No TradeSARNo TradeNo TradeZAR10.3241No Trade"
+    ],
+    "ts": "2026-10-10T07:34:01.430010+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 1,
+        "headers": [
+          "Oct 10, 2026"
+        ],
+        "sample": []
+      },
+      {
+        "index": 1,
+        "rows": 8,
+        "headers": [
+          "Country",
+          "Currency",
+          "Buying",
+          "Selling",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "",
+            "USD",
+            "160.9077",
+            "164.1259",
+            "160.9077",
+            "164.1259"
+          ],
+          [
+            "",
+            "GBP",
+            "213.6693",
+            "217.9427",
+            "213.6693",
+            "217.9427"
+          ],
+          [
+            "",
+            "EUR",
+            "187.2644",
+            "191.0097",
+            "187.2644",
+            "191.0097"
+          ]
+        ]
+      },
+      {
+        "index": 2,
+        "rows": 9,
+        "headers": [
+          "Country",
+          "Currency",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "",
+            "USD",
+            "167.0678",
+            "168.3352"
+          ],
+          [
+            "",
+            "GBP",
+            "No Trade",
+            "No Trade"
+          ],
+          [
+            "",
+            "EUR",
+            "No Trade",
+            "194.7032"
+          ]
+        ]
+      }
+    ]
+  },
+  "SIDAMA": {
+    "status": 200,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [
+      "https://sidamabanksc.com/reporting-format-for-foreign-exchange-fees-and-charges/",
+      "https://sidamabanksc.com/exchange-rate/"
+    ],
+    "rate_text_lines": [
+      "USD",
+      "United States DollarCash Buying161.7237 BirrCash Selling164.9582 BirrTransactional Buying161.7237 BirrTransactional Selling164.9582 BirrPrev Weighted BuyingNo TradePrev Weighted SellingNo Trade",
+      "EUR",
+      "EuroCash Buying184.1252 BirrCash Selling187.8075 BirrTransactional Buying184.1252 BirrTransactional Selling187.8075 BirrPrev Weighted BuyingNo TradePrev Weighted SellingNo Trade"
+    ],
+    "ts": "2026-10-10T07:34:04.534402+00:00",
+    "table_summary": []
+  },
+  "SIKET": {
+    "status": 403,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [],
+    "rate_text_lines": [],
+    "ts": "2026-10-10T07:34:06.621549+00:00",
+    "table_summary": []
+  },
+  "TSEHAY": {
+    "status": 200,
+    "type": "html",
+    "tables": 2,
+    "rate_links": [
+      "https://tsehaybank.com.et/exchange-rate/",
+      "https://tsehaybank.com.et/corporate-social-responsibility-csr/",
+      "https://tsehaybank.com.et/foreign-currency-accounts/",
+      "https://tsehaybank.com.et/foreign-currency-accounts/",
+      "https://tsehaybank.com.et/foreign-currency-accounts/"
+    ],
+    "rate_text_lines": [
+      "USD161.6012164.8332161.6012164.8332",
+      "GBP215.0910219.3928215.0910219.3928",
+      "EUR189.7090193.5032189.7090193.5032",
+      "Weighted Average Actual Buying and Selling Rates"
+    ],
+    "ts": "2026-10-10T07:34:10.656227+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 9,
+        "headers": [
+          "CURRENCY",
+          "CASH",
+          "TRANSACTION"
+        ],
+        "sample": [
+          [
+            "BUYING",
+            "SELLING",
+            "BUYING",
+            "SELLING"
+          ],
+          [
+            "USD",
+            "161.6012",
+            "164.8332",
+            "161.6012",
+            "164.8332"
+          ],
+          [
+            "GBP",
+            "215.0910",
+            "219.3928",
+            "215.0910",
+            "219.3928"
+          ]
+        ]
+      },
+      {
+        "index": 1,
+        "rows": 7,
+        "headers": [
+          "Currency",
+          "Code",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "US DOLLAR",
+            "USD",
+            "No Trade",
+            "169.7764"
+          ],
+          [
+            "POUND STERLING",
+            "GBP",
+            "No Trade",
+            "No Trade"
+          ],
+          [
+            "EURO",
+            "EUR",
+            "No Trade",
+            "No Trade"
+          ]
+        ]
+      }
+    ]
+  },
+  "ZAMZAM": {
+    "status": 403,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [],
+    "rate_text_lines": [],
+    "ts": "2026-10-10T07:34:12.602627+00:00",
+    "table_summary": []
+  },
+  "ABAY": {
+    "status": 403,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [],
+    "rate_text_lines": [],
+    "ts": "2026-10-10T07:34:14.845754+00:00",
+    "table_summary": []
+  },
+  "AHADU": {
+    "status": 200,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [
+      "https://ahadubank.com/personal/corporate-banking/",
+      "https://ahadubank.com/personal/corporate-banking/",
+      "https://ahadubank.com/personal/corporate-banking/",
+      "https://ahadubank.com/corporate-governance/",
+      "#"
+    ],
+    "rate_text_lines": [
+      "Buying:  161.2929",
+      "Selling:  164.5188",
+      "Buying: 215.6425",
+      "Selling: 219.9554"
+    ],
+    "ts": "2026-10-10T07:34:17.073619+00:00",
+    "table_summary": []
+  },
+  "DBE": {
+    "status": 200,
+    "type": "html",
+    "tables": 2,
+    "rate_links": [
+      "",
+      ""
+    ],
+    "rate_text_lines": [
+      "CurrencyCodeBuyingSelling",
+      "USD161.6278164.8604",
+      "GBP213.3810217.6486",
+      "EUR180.6514184.2644"
+    ],
+    "ts": "2026-10-10T07:34:18.849209+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 20,
+        "headers": [
+          "Currency",
+          "Code",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "",
+            "USD",
+            "161.6278",
+            "164.8604"
+          ],
+          [
+            "",
+            "GBP",
+            "213.3810",
+            "217.6486"
+          ],
+          [
+            "",
+            "EUR",
+            "180.6514",
+            "184.2644"
+          ]
+        ]
+      },
+      {
+        "index": 1,
+        "rows": 20,
+        "headers": [
+          "Currency",
+          "Code",
+          "Buying",
+          "Selling",
+          ""
+        ],
+        "sample": [
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ],
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      }
+    ]
+  },
+  "ENAT": {
+    "status": 200,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [
+      "/#exchange"
+    ],
+    "rate_text_lines": [
+      "Enat BankAboutServicesEnglish\u121b\u1295 \u12a5\u1295\u12f0 Exchange RateOct 10, 2026SwiftENATETAAGraphCashTransactionWeightedCurrencyBuyingSellingUSD161.3736164.6011EUR187.0333190.7740GBP215.1435219.4464CAD114.3343116.6210AED44.350745.2377CNY23.696024.1699Our Remittance PartnersReceive remittance through the bank in Ethiopia. Partnering with more than 13 world-class agents.Latest NewsAll the latest news and updates from Enat Bank. View All Bid Advertisement 2Oct 2, 2026, 07:32 AMEnat Bank Hosted First-Ever GABV Africa Chapter Meeting in EthiopiaOct 2, 2026, 07:15 AMBanking that fits in your hand: meet the new Enat mobile appAug 18, 2026, 11:46 AMBig news!"
+    ],
+    "ts": "2026-10-10T07:34:20.981009+00:00",
+    "table_summary": []
+  },
+  "GADAA": {
+    "status": 200,
+    "type": "html",
+    "tables": 0,
+    "rate_links": [],
+    "rate_text_lines": [],
+    "ts": "2026-10-10T07:34:22.308212+00:00",
+    "table_summary": []
+  },
+  "GLOBAL": {
+    "status": 200,
+    "type": "html",
+    "tables": 2,
+    "rate_links": [
+      "https://www.globalbankethiopia.com/remittance-forex/",
+      "https://www.globalbankethiopia.com/remittance-forex/",
+      "https://www.globalbankethiopia.com/remittance-forex/",
+      "https://www.globalbankethiopia.com/remittance-forex/",
+      "https://www.globalbankethiopia.com/remittance-forex/"
+    ],
+    "rate_text_lines": [
+      "Buying",
+      "Selling",
+      "USD",
+      "EUR"
+    ],
+    "ts": "2026-10-10T07:34:32.671114+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 5,
+        "headers": [
+          "Currency",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "USD",
+            "161.5581",
+            "164.7893"
+          ],
+          [
+            "EUR",
+            "186.6421",
+            "190.3749"
+          ],
+          [
+            "GBP",
+            "212.9912",
+            "217.2510"
+          ]
+        ]
+      },
+      {
+        "index": 1,
+        "rows": 5,
+        "headers": [
+          "Currency",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "USD",
+            "164.9606",
+            "164.7893"
+          ],
+          [
+            "EUR",
+            "No Trade",
+            "No Trade"
+          ],
+          [
+            "GBP",
+            "No Trade",
+            "No Trade"
+          ]
+        ]
+      }
+    ]
+  },
+  "OMO": {
+    "status": 200,
+    "type": "html",
+    "tables": 3,
+    "rate_links": [
+      "https://omobanksc.com/corporate-statement/",
+      "https://omobanksc.com/foreign-deposit/",
+      "#tab_weighted-average-buying/selling-rate"
+    ],
+    "rate_text_lines": [
+      "Cash Buying/Selling",
+      "Transaction Buying/Selling",
+      "Weighted Average Buying/Selling Rate",
+      "Cash Buying And Selling"
+    ],
+    "ts": "2026-10-10T07:34:34.923057+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 8,
+        "headers": [
+          "07/10/2026",
+          "Cash Buying Rate",
+          "Cash Selling Rate"
+        ],
+        "sample": [
+          [
+            "",
+            "USD \u2013 US Dollar",
+            "160.3720",
+            "163.5794"
+          ],
+          [
+            "",
+            "EUR \u2013 European Euro",
+            "182.5675",
+            "186.2188"
+          ],
+          [
+            "",
+            "GBP \u2013 British Pound",
+            "214.0325",
+            "218.3131"
+          ]
+        ]
+      },
+      {
+        "index": 1,
+        "rows": 8,
+        "headers": [
+          "07/10/2026",
+          "Transaction Buying Rate",
+          "Transaction Selling Rate"
+        ],
+        "sample": [
+          [
+            "",
+            "USD \u2013 US Dollar",
+            "159.7662",
+            "162.9455"
+          ],
+          [
+            "",
+            "EUR \u2013 European Euro",
+            "181.8778",
+            "185.4972"
+          ],
+          [
+            "",
+            "GBP \u2013 British Pound",
+            "213.2240",
+            "217.4671"
+          ]
+        ]
+      },
+      {
+        "index": 2,
+        "rows": 8,
+        "headers": [
+          "06/10/2026",
+          "WEIGHTED AVR BUYING RATE",
+          "WEIGHTED AVR SELLING RATE"
+        ],
+        "sample": [
+          [
+            "",
+            "USD \u2013 US Dollar",
+            "No Trade",
+            "No Trade"
+          ],
+          [
+            "",
+            "EUR \u2013 European Euro",
+            "No Trade",
+            "No Trade"
+          ],
+          [
+            "",
+            "GBP \u2013 British Pound",
+            "No Trade",
+            "No Trade"
+          ]
+        ]
+      }
+    ]
+  },
+  "SIINQEE": {
+    "status": 200,
+    "type": "html",
+    "tables": 1,
+    "rate_links": [
+      "https://siinqeebank.com/international-banking/#mobile-fusion-tab-foreigntransfer",
+      "https://siinqeebank.com/foreign-currency/",
+      "https://siinqeebank.com/foreign-currency/#mobile-fusion-tab-diasporaaccount",
+      "https://siinqeebank.com/foreign-currency/#fusion-tab-retentionaccount",
+      "https://siinqeebank.com/foreign-currency/#mobile-fusion-tab-foreigncurrencysavingaccount"
+    ],
+    "rate_text_lines": [
+      "Buying",
+      "Selling",
+      "USD",
+      "EUR"
+    ],
+    "ts": "2026-10-10T07:34:37.701560+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 7,
+        "headers": [
+          "Currency",
+          "Buying",
+          "Selling"
+        ],
+        "sample": [
+          [
+            "USD",
+            "160.8993",
+            "164.1173"
+          ],
+          [
+            "EUR",
+            "186.6020",
+            "190.3340"
+          ],
+          [
+            "GBP",
+            "210.4047",
+            "214.6128"
+          ]
+        ]
+      }
+    ]
+  },
+  "TSEDEY": {
+    "status": 200,
+    "type": "html",
+    "tables": 2,
+    "rate_links": [
+      "https://www.tsedeybank.com.et/corporate-social-responsibility",
+      "https://www.tsedeybank.com.et/corporate-social-responsibility",
+      "https://www.tsedeybank.com.et/corporate-social-responsibility"
+    ],
+    "rate_text_lines": [
+      "Buying",
+      "Selling",
+      "Buying",
+      "Selling"
+    ],
+    "ts": "2026-10-10T07:34:40.950869+00:00",
+    "table_summary": [
+      {
+        "index": 0,
+        "rows": 2,
+        "headers": [
+          "Currency",
+          "Buying",
+          "Selling",
+          "W. Avg Buy",
+          "W. Avg Sell"
+        ],
+        "sample": [
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      },
+      {
+        "index": 1,
+        "rows": 2,
+        "headers": [
+          "Currency",
+          "Buying",
+          "Selling",
+          "Weighted Avg Buying",
+          "Weighted Avg Selling"
+        ],
+        "sample": [
+          [
+            "",
+            "",
+            "",
+            "",
+            ""
+          ]
+        ]
+      }
+    ]
+  }
+}

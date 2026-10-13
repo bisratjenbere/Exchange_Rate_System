@@ -1,0 +1,4 @@
+[
+  {"id":1,"currency":"ETB","buying":"1.0000","selling":"1.0000","transactionBuying":"1.0000","transactionSelling":"1.0000","weightedBuying":null,"weightedSelling":null,"createdAt":"2025-05-28T08:16:48.000Z","updatedAt":"2025-05-28T08:16:48.000Z"},
+  {"id":2,"currency":"USD","buying":"161.6768","selling":"164.9103","transactionBuying":"161.6768","transactionSelling":"164.9103","weightedBuying":"162.9240","weightedSelling":"170.4175","createdAt":"2025-05-28T08:16:48.000Z","updatedAt":"2026-09-30T07:09:31.000Z"}
+]

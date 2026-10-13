@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": 1,
+      "attributes": {
+        "date": "2026-10-08",
+        "currency_code": "USD",
+        "buy_rate": 161.7253,
+        "sell_rate": 164.9598
+      }
+    }
+  ],
+  "meta": {"pagination": {"page": 1, "pageSize": 25, "pageCount": 1, "total": 1}}
+}
