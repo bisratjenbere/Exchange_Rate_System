@@ -4,13 +4,17 @@ LOCKED rules:
 - Fallback dates never participate in identity (gap review §5).
 - Ambiguous identity is retained and flagged, never invented.
 - Identity hierarchy: stable source ID > source_published date > derived > ambiguous.
+- collection_date_fallback: use fetched_at date as derived effective_date so records
+  get is_current=TRUE. Banks that don't publish dates still produce usable daily rates.
 """
+from datetime import date as date_type
 from typing import Optional
 from domain.records import AdapterRecord
 from domain.enums import IdentityStatus
 
 
-def build_identity(record: AdapterRecord, source_id: int) -> tuple:
+def build_identity(record: AdapterRecord, source_id: int,
+                   fetched_date: Optional[date_type] = None) -> tuple:
     """
     Returns (logical_observation_key: str | None, identity_status: IdentityStatus).
 
@@ -44,6 +48,12 @@ def build_identity(record: AdapterRecord, source_id: int) -> tuple:
         key = f"{source_id}:{currency}:{category}:{record.effective_date.isoformat()}"
         return key, IdentityStatus.DERIVED
 
-    # Weak: fallback date or no date — ambiguous, key is None
-    # Gap review §5: fallback dates never participate in identity
+    # Weak-but-usable: collection_date_fallback with a known fetched_date
+    # Use fetched_at date as derived effective_date — bank publishes daily but omits date stamp.
+    if (record.effective_date_basis == "collection_date_fallback"
+            and fetched_date is not None):
+        key = f"{source_id}:{currency}:{category}:{fetched_date.isoformat()}"
+        return key, IdentityStatus.DERIVED
+
+    # No date at all — ambiguous, key is None
     return None, IdentityStatus.AMBIGUOUS

@@ -205,7 +205,77 @@ All survey results are KNOWN from one fetch. None are VERIFIED (no official-disp
 
 ---
 
-## Milestone gate log
+## Session 2 — 2026-10-13
+
+### Production operations, UI rebuild, adapter findings
+
+**Scheduler timing fix:**
+First run (08:00 EAT) only caught CBE, DBE, Ahadu. Analysis of publishing times showed banks fall into 3 groups. Updated cron and systemd timer to 3 daily runs:
+- 05:00 UTC (08:00 EAT) — CBE, DBE, Ahadu
+- 09:00 UTC (12:00 EAT) — Enat, Rammis, Sidama, Wegagen
+- 12:00 UTC (15:00 EAT) — BOA, NIB, Omo (target)
+Files: scheduler/exchange_rates.cron, scheduler/exchange_rates.timer.
+
+**Source cleanup — 11 sources disabled:**
+- Stale/broken: ADIB (13 days stale), Dashen (3 days stale, adapter failing)
+- Never collected a single rate: CBO, Berhan, Bunna, Amhara, Hibret, Global, Goh Betoch, Siinqee, Tsehay
+Command: `UPDATE rate_source SET is_enabled = FALSE WHERE id IN (3,2,11,9,7,10,15,16,17,23,26);`
+Active sources: 10 (CBE, DBE, Enat, Ahadu, Wegagen, Rammis, Sidama, BOA, NIB, Omo)
+
+**UI rebuild — full replacement of index.html:**
+- Compare Banks view: ranked bar chart, gold/silver/bronze positions, PROVISIONAL/STALE badges
+- By Bank view: pivot table, currencies as rows, categories as column groups, pagination
+- All Rates view: currency × bank matrix, sticky currency column, best rate highlighted green
+- History view (new): 4th nav tab, grouped by effective_date descending, currency + date selectors, ★ best rate per date
+- Search: datalist autocomplete (currencies + bank names)
+- Filter: Major/All currency toggle
+- Decimal display: rounded to 4 places (160.2319 not 160.2319000000)
+Files: api/templates/index.html, api/app.py, trusted_view/query.py
+
+**New query functions added to trusted_view/query.py:**
+- `get_best_rates_by_currency(conn, currency)` — compare view
+- `get_bank_rates_pivoted(conn, source_id)` — by-bank view
+- `get_currency_matrix(conn, major_only)` — all-rates matrix
+- `get_available_dates(conn)` — history date selector
+- `get_history_by_currency(conn, currency, date)` — history view
+- `get_search_suggestions(conn)` — datalist autocomplete
+- All queries now filter `rs.is_enabled = TRUE`
+
+**Adapter investigation findings (2026-10-13):**
+
+| Bank | Finding | Status |
+|---|---|---|
+| BOA | Page has 0 HTML tables. Rates loaded via WordPress download manager (JS). Static fetch unreliable — succeeds occasionally, fails most runs. | Next sprint: find direct download endpoint or PDF |
+| NIB | Site publishes daily with today's date (confirmed 2026-10-13 in page). Adapter parsing broken — site returns 200 but parse fails. | Next sprint: debug adapter against live page |
+| Omo | `omobank.com` is a parked domain (domain reseller). Oct 12 data was a fluke. Real Omo Bank URL unknown. | Next sprint: find correct official URL |
+| Ahadu | Adapter correct — homepage only publishes 1 currency (USD). Not a bug. | No action needed |
+| Dashen | Adapter was working Oct 10, failing since. Page structure may have changed. | Next sprint: re-inspect page, fix adapter, re-enable |
+| ADIB | Last successful collection Sep 30 (13 days). API endpoint may have changed. | Next sprint: re-inspect API, fix adapter, re-enable |
+
+**Current production state (2026-10-13 end of day):**
+- 10 active sources, 7 collecting fresh today (CBE, DBE, Enat, Ahadu, Wegagen, Rammis, Sidama)
+- BOA, NIB, Omo: 1 day stale — adapter issues identified above
+- All sources: verification_status = unverified (PROVISIONAL badge showing in UI)
+- 429 tests passing
+
+**Open — Step 3 (this week): verify active sources**
+For each of the 7 healthy sources, visit bank website, confirm rate matches UI, then:
+```sql
+UPDATE rate_source SET verification_status = 'verified' WHERE id = <id>;
+```
+This removes the PROVISIONAL badge from the UI.
+Priority order: CBE (id=1), DBE (id=12), Rammis (id=21), Sidama (id=22), Wegagen (id=27), Enat (id=13), Ahadu (id=6)
+
+**Open — Next sprint: adapter fixes**
+1. NIB — debug parser against live page
+2. BOA — find direct rate endpoint (not the JS-rendered page)
+3. Omo — find correct official URL for Omo Bank Ethiopia
+4. Dashen — re-inspect page structure, fix adapter, re-enable (id=2)
+5. ADIB — re-inspect API endpoint, fix adapter, re-enable (id=3)
+
+---
+
+
 
 | Milestone | Status | Date |
 |-----------|--------|------|

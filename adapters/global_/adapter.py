@@ -22,7 +22,7 @@ ADAPTER_KEY = "global_html"
 SOURCE_URL = "https://www.globalbankethiopia.com/remittance-forex/"
 
 
-def parse(raw_html: str, category: str = "UNKNOWN") -> tuple:
+def parse(raw_html: str, category: str = "transactional") -> tuple:
     soup = BeautifulSoup(raw_html, "html.parser")
     tables = soup.find_all("table")
     if not tables:
@@ -37,7 +37,7 @@ def parse(raw_html: str, category: str = "UNKNOWN") -> tuple:
     return records, errors
 
 
-def _parse_table(table, table_index: int, category: str = "UNKNOWN") -> list:
+def _parse_table(table, table_index: int, category: str = "transactional") -> list:
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:

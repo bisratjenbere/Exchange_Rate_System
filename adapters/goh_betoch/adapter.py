@@ -49,13 +49,13 @@ def _parse_table(table) -> list:
         if not currency_code:
             continue
 
-        # Plain pair — category UNKNOWN
+        # Plain pair — transactional
         plain_buy = _safe_rate(cells[2])
         plain_sell = _safe_rate(cells[3])
         if plain_buy is not None or plain_sell is not None:
-            records.append(_make_record(currency_code, currency_name, "UNKNOWN",
+            records.append(_make_record(currency_code, currency_name, "transactional",
                                         plain_buy, plain_sell, cells[2], cells[3],
-                                        ["category_unknown:plain_pair_unconfirmed"]))
+                                        ["date_ambiguous:no_source_published_date"]))
 
         # Weighted average
         if len(cells) >= 6:

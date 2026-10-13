@@ -1,0 +1,67 @@
+services:
+  # PostgreSQL Database
+  - type: pserv
+    name: exchange-rates-db
+    plan: free
+    databaseName: exchange_rates
+    databaseUser: exchange_rates_user
+    ipAllowList: []
+
+  # Web Service (Flask API + UI)
+  - type: web
+    name: exchange-rates-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT api.app:app
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: exchange-rates-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: FLASK_ENV
+        value: production
+      - key: TZ
+        value: Africa/Addis_Ababa
+    healthCheckPath: /health
+
+  # Cron Job 1: Early Collection (08:00 EAT)
+  - type: cron
+    name: collect-early
+    env: python
+    schedule: "0 5 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 -m scheduler.run_job
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: exchange-rates-db
+          property: connectionString
+
+  # Cron Job 2: Mid-day Collection (12:00 EAT)
+  - type: cron
+    name: collect-midday
+    env: python
+    schedule: "0 9 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 -m scheduler.run_job
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: exchange-rates-db
+          property: connectionString
+
+  # Cron Job 3: Afternoon Collection (15:00 EAT)
+  - type: cron
+    name: collect-afternoon
+    env: python
+    schedule: "0 12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 -m scheduler.run_job
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: exchange-rates-db
+          property: connectionString

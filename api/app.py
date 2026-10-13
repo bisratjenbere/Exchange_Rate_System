@@ -36,7 +36,12 @@ from trusted_view.query import (
 )
 
 app = Flask(__name__)
+
+# Handle different DATABASE_URL formats (Render uses postgres://, psycopg2 needs postgresql://)
 DSN = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
+if DSN.startswith("postgres://"):
+    DSN = DSN.replace("postgres://", "postgresql://", 1)
+
 PAGE_SIZE = 25
 
 

@@ -4,8 +4,10 @@
 #   crontab -e
 #   paste the line below (adjust PROJECT_DIR and python path)
 #
-# Runs daily at 08:00 Addis Ababa time (EAT = UTC+3 → 05:00 UTC).
-# Ethiopian banks publish morning rates; 08:00 EAT catches all of them.
+# Runs 3 times daily to catch banks that publish at different times:
+#   08:00 EAT (05:00 UTC) — CBE, DBE, Ahadu (publish at open)
+#   12:00 EAT (09:00 UTC) — Enat, Rammis, Sidama, Wegagen (publish mid-morning)
+#   15:00 EAT (12:00 UTC) — BOA, NIB, Omo, Dashen (publish afternoon)
 #
 # Stdout+stderr appended to logs/cron.log.
 # Exit code 1 (all sources failed) is visible in cron mail if MAILTO is set.
@@ -17,4 +19,6 @@
 MAILTO=""
 PROJECT_DIR=/home/bisru/Exchange_Rate_System
 
-0 5 * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
+0 5  * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
+0 9  * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
+0 12 * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1

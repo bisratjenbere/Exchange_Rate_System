@@ -329,8 +329,8 @@
           <div class="rank-bar" style="width:{{ pct }}%"></div>
         </div>
       </div>
-      <span class="rank-buying">{{ r.buying_rate }}</span>
-      <span class="rank-selling">{{ r.selling_rate or '—' }}</span>
+      <span class="rank-buying">{{ r.buying_rate | round(4) }}</span>
+      <span class="rank-selling">{{ r.selling_rate | round(4) if r.selling_rate else '—' }}</span>
       <span class="rank-meta">
         {{ r.effective_date.strftime('%d %b') if r.effective_date else '—' }}
       </span>
@@ -390,8 +390,8 @@
           <td>{{ cur }}</td>
           {% for cat in cats %}
             {% if cat in cat_data %}
-              <td class="buy">{{ cat_data[cat].buying or '—' }}</td>
-              <td class="sell">{{ cat_data[cat].selling or '—' }}</td>
+              <td class="buy">{{ cat_data[cat].buying | round(4) if cat_data[cat].buying else '—' }}</td>
+              <td class="sell">{{ cat_data[cat].selling | round(4) if cat_data[cat].selling else '—' }}</td>
             {% else %}
               <td class="na">—</td><td class="na">—</td>
             {% endif %}
@@ -442,7 +442,7 @@
           {% if cell and cell.buying %}
             {% set is_best = cell.buying == matrix.best_buying.get(cur) %}
             <td class="{{ 'best-cell' if is_best }}">
-              {{ cell.buying }}
+              {{ cell.buying | round(4) }}
             </td>
           {% else %}
             <td class="na-cell">—</td>
@@ -489,8 +489,8 @@
             <tr class="{{ 'best-row' if is_best }}">
               <td>{{ r.bank_name }}{% if is_best %} ★{% endif %}</td>
               <td style="text-align:left;color:#999;font-size:0.78rem">{{ r.category or '—' }}</td>
-              <td class="buy">{{ r.buying_rate or '—' }}</td>
-              <td class="sell">{{ r.selling_rate or '—' }}</td>
+              <td class="buy">{{ r.buying_rate | round(4) if r.buying_rate else '—' }}</td>
+              <td class="sell">{{ r.selling_rate | round(4) if r.selling_rate else '—' }}</td>
             </tr>
           {% endfor %}
           </tbody>

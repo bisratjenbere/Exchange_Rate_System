@@ -13,7 +13,7 @@ LOCKED rules:
 - Ambiguous identity retained and flagged.
 - category_id resolved from rate_category table; NULL for UNKNOWN.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -80,7 +80,14 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
     fingerprint = compute_fingerprint(record, source_id)
 
     # 4. Identity
-    logical_key, identity_status = build_identity(record, source_id)
+    logical_key, identity_status = build_identity(record, source_id,
+                                                   fetched_date=fetched_at.date())
+
+    # Fill effective_date from fetched_at for collection_date_fallback records
+    if (record.effective_date is None
+            and record.effective_date_basis == "collection_date_fallback"
+            and identity_status == IdentityStatus.DERIVED):
+        record = dc_replace(record, effective_date=fetched_at.date())
 
     # 5. Deduplicate
     if identity_status == IdentityStatus.AMBIGUOUS:

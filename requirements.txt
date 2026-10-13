@@ -1,0 +1,16 @@
+# Web Framework
+Flask==3.0.0
+gunicorn==21.2.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# HTML Parsing
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# HTTP Requests
+requests==2.31.0
+
+# Testing (optional but recommended)
+pytest==7.4.3

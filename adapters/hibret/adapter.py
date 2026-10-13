@@ -47,7 +47,7 @@ def parse(raw_html: str) -> tuple:
 
 
 def _parse_cash_txn_table(table) -> list:
-    """Parse single table: cash cols 1-2, txn cols 3-4."""
+    """Parse single table: cash cols 2-3, txn cols 4-5. Currency in col1 as 'CODE (Name)'."""
     rows = table.find_all("tr")
     data_rows = [r for r in rows if r.find("td")]
     if not data_rows:
@@ -56,13 +56,20 @@ def _parse_cash_txn_table(table) -> list:
     records = []
     for row in data_rows:
         cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 5:
+        if len(cells) < 6:
             continue
-        currency_code = cells[0].strip()
+        # col0 is empty, col1 is "CODE (Name)" or just "CODE"
+        raw = cells[1].strip()
+        if not raw:
+            continue
+        # Extract code: take first word before space or parenthesis
+        import re
+        m = re.match(r'^([A-Z]{2,4})', raw)
+        currency_code = m.group(1) if m else raw.split()[0]
         if not currency_code:
             continue
 
-        for category, buy_idx, sell_idx in [("cash", 1, 2), ("transactional", 3, 4)]:
+        for category, buy_idx, sell_idx in [("cash", 2, 3), ("transactional", 4, 5)]:
             buying = _safe_rate(cells[buy_idx])
             selling = _safe_rate(cells[sell_idx])
             if buying is None and selling is None:

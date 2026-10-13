@@ -3,9 +3,13 @@ Description=Daily trigger for Ethiopian Bank Exchange Rate Collection
 Requires=exchange_rates.service
 
 [Timer]
-# 08:00 Addis Ababa time (EAT = UTC+3)
+# 3 runs daily (EAT = UTC+3):
+#   08:00 EAT — CBE, DBE, Ahadu
+#   12:00 EAT — Enat, Rammis, Sidama, Wegagen
+#   15:00 EAT — BOA, NIB, Omo, Dashen
 OnCalendar=*-*-* 05:00:00 UTC
-# If the system was off at 05:00, run as soon as it comes back up
+OnCalendar=*-*-* 09:00:00 UTC
+OnCalendar=*-*-* 12:00:00 UTC
 Persistent=true
 Unit=exchange_rates.service
 

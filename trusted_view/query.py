@@ -22,6 +22,7 @@ _TRUSTED_WHERE = """
     AND o.identity_status != 'ambiguous'
     AND o.validation_status != 'rejected'
     AND o.category_id IS NOT NULL
+    AND rs.is_enabled = TRUE
 """
 
 _TRUSTED_SELECT = """
@@ -129,6 +130,7 @@ def get_best_rates_by_currency(conn, currency_code: str) -> list:
           AND o.identity_status != 'ambiguous'
           AND o.validation_status != 'rejected'
           AND o.category_id IS NOT NULL
+          AND rs.is_enabled = TRUE
           AND o.source_currency_code = %s
         ORDER BY rs.id, o.buying_rate DESC NULLS LAST
     """
@@ -255,6 +257,7 @@ def get_available_dates(conn) -> list:
             WHERE o.identity_status != 'ambiguous'
               AND o.validation_status != 'rejected'
               AND o.category_id IS NOT NULL
+              AND rs.is_enabled = TRUE
             ORDER BY o.effective_date DESC
         """)
         return [r[0] for r in cur.fetchall()]
@@ -287,6 +290,7 @@ def get_history_by_currency(conn, currency_code: str, effective_date=None) -> li
         WHERE o.identity_status != 'ambiguous'
           AND o.validation_status != 'rejected'
           AND o.category_id IS NOT NULL
+          AND rs.is_enabled = TRUE
           AND o.source_currency_code = %s
           {date_clause}
         ORDER BY o.effective_date DESC, rs.id, o.buying_rate DESC NULLS LAST
