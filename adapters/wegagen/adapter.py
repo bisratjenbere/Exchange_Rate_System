@@ -28,10 +28,10 @@ SOURCE_URL = "https://weg.back.strapi.wegagen.com/api/exchange-rates?populate=*"
 _REQUIRED_ATTRS = {"date", "code", "buying", "selling"}
 
 
-def parse(raw_json: str, category: str = "UNKNOWN") -> list:
+def parse(raw_json: str) -> list:
     """
     Parse the Strapi v4 JSON envelope into AdapterRecords.
-    category: injected by scheduler from rate_source.default_category (ADR-008).
+    Emits two records per row: one cash (buying/selling), one transactional (tra_buying/tra_selling).
     Raises ValueError if envelope is malformed or required keys are missing.
     Returns empty list if data array is empty.
     """
@@ -47,17 +47,18 @@ def parse(raw_json: str, category: str = "UNKNOWN") -> list:
     if not isinstance(items, list):
         raise ValueError(f"Wegagen: 'data' must be an array, got {type(items).__name__}")
 
-    return [r for item in items for r in [_parse_item(item, category)] if r is not None]
+    return [r for item in items for r in _parse_item(item) if r is not None]
 
 
-def _parse_item(item: dict, category: str = "UNKNOWN") -> Optional[AdapterRecord]:
+def _parse_item(item: dict) -> list:
+    """Emit up to two records per item: one cash, one transactional."""
     if not isinstance(item, dict):
-        return None
+        return []
 
     item_id = item.get("id")
     attrs = item.get("attributes", {})
     if not isinstance(attrs, dict):
-        return None
+        return []
 
     missing = _REQUIRED_ATTRS - attrs.keys()
     if missing:
@@ -65,43 +66,57 @@ def _parse_item(item: dict, category: str = "UNKNOWN") -> Optional[AdapterRecord
 
     currency = str(attrs.get("code", "")).strip()
     if not currency:
-        return None
+        return []
 
     effective_date = _parse_date(attrs.get("date", ""))
     date_basis = "source_published" if effective_date else "collection_date_fallback"
     unit = int(attrs.get("unit", 1) or 1)
 
-    buying = _safe_rate(attrs.get("buying"))
-    selling = _safe_rate(attrs.get("selling"))
-    if buying is None and selling is None:
-        return None
+    records = []
 
-    return AdapterRecord(
-        source_currency_code=currency,
-        category=category,
-        buying_rate=buying,
-        selling_rate=selling,
-        source_rate_text=f"{attrs.get('buying')}/{attrs.get('selling')}",
-        effective_date=effective_date,
-        effective_date_basis=date_basis,
-        source_record_key=str(item_id) if item_id is not None else None,
-        source_publication_key=None,
-        quote_currency_code=None,  # ETB implied
-        unit_multiplier=unit,
-        raw_excerpt={
-            "id": item_id,
-            "code": currency,
-            "date": attrs.get("date"),
-            "buying": attrs.get("buying"),
-            "selling": attrs.get("selling"),
-            "tra_buying": attrs.get("tra_buying"),
-            "tra_selling": attrs.get("tra_selling"),
-        },
-        mapping_notes=[
-            "category_unknown:buying_equals_tra_buying_TO_VERIFY",
-            "strapi_v4:populate_star",
-        ],
-    )
+    # cash rate
+    cash_buy = _safe_rate(attrs.get("buying"))
+    cash_sell = _safe_rate(attrs.get("selling"))
+    if cash_buy is not None or cash_sell is not None:
+        records.append(AdapterRecord(
+            source_currency_code=currency,
+            category="cash",
+            buying_rate=cash_buy,
+            selling_rate=cash_sell,
+            source_rate_text=f"{attrs.get('buying')}/{attrs.get('selling')}",
+            effective_date=effective_date,
+            effective_date_basis=date_basis,
+            source_record_key=f"{item_id}:cash" if item_id is not None else None,
+            source_publication_key=None,
+            quote_currency_code=None,
+            unit_multiplier=unit,
+            raw_excerpt={"id": item_id, "code": currency, "date": attrs.get("date"),
+                         "buying": attrs.get("buying"), "selling": attrs.get("selling")},
+            mapping_notes=["strapi_v4:populate_star"],
+        ))
+
+    # transactional rate
+    tra_buy = _safe_rate(attrs.get("tra_buying"))
+    tra_sell = _safe_rate(attrs.get("tra_selling"))
+    if tra_buy is not None or tra_sell is not None:
+        records.append(AdapterRecord(
+            source_currency_code=currency,
+            category="transactional",
+            buying_rate=tra_buy,
+            selling_rate=tra_sell,
+            source_rate_text=f"{attrs.get('tra_buying')}/{attrs.get('tra_selling')}",
+            effective_date=effective_date,
+            effective_date_basis=date_basis,
+            source_record_key=f"{item_id}:transactional" if item_id is not None else None,
+            source_publication_key=None,
+            quote_currency_code=None,
+            unit_multiplier=unit,
+            raw_excerpt={"id": item_id, "code": currency, "date": attrs.get("date"),
+                         "tra_buying": attrs.get("tra_buying"), "tra_selling": attrs.get("tra_selling")},
+            mapping_notes=["strapi_v4:populate_star"],
+        ))
+
+    return records
 
 
 def _safe_rate(raw) -> Optional[Decimal]:

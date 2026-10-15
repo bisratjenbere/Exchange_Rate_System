@@ -43,50 +43,45 @@ _MONTH_MAP = {
 
 
 def parse(raw_html: str) -> tuple:
-    """
-    Parse the Dashen HTML page.
-    Returns (records: list[AdapterRecord], errors: list[str]).
-    Partial failure: errors are non-empty when a table could not be parsed.
-    Never raises — errors are collected and returned.
-    """
     soup = BeautifulSoup(raw_html, "html.parser")
+    # Extract page-level date for tables 0 and 1 (transactional/cash)
+    page_text = soup.get_text(" ")
+    page_date = _extract_date_from_text(page_text)
     tables = soup.find_all("table")
-
     records = []
     errors = []
-
     for idx, category in _TABLE_CATEGORIES.items():
         if idx >= len(tables):
             errors.append(f"table_{idx}_{category}:missing")
             continue
         try:
-            table_records = _parse_table(tables[idx], idx, category)
+            table_records = _parse_table(tables[idx], idx, category, page_date)
             records.extend(table_records)
         except Exception as exc:
             errors.append(f"table_{idx}_{category}:{exc}")
-
     return records, errors
 
 
-def _parse_table(table, idx: int, category: str) -> list:
+def _parse_table(table, idx: int, category: str, page_date=None) -> list:
     rows = table.find_all("tr")
     if not rows:
         return []
-
     if category == "weighted_average":
         return _parse_weighted_table(rows)
     else:
-        return _parse_standard_table(rows, category)
+        return _parse_standard_table(rows, category, page_date)
 
 
-def _parse_standard_table(rows, category: str) -> list:
-    """Parse transactional or cash table (no date in header)."""
-    # Row 0 is header — identify buying/selling column indices
+def _parse_standard_table(rows, category: str, page_date=None) -> list:
+    """Parse transactional or cash table, using page_date if available."""
     header_cells = [c.get_text(strip=True).lower() for c in rows[0].find_all(["th", "td"])]
     buy_idx = _find_col(header_cells, ["transaction buying", "cash buying", "buying"])
     sell_idx = _find_col(header_cells, ["transaction selling", "cash selling", "selling"])
     if buy_idx is None or sell_idx is None:
         raise ValueError(f"Cannot find buying/selling columns in header: {header_cells}")
+
+    effective_date = page_date
+    date_basis = "source_published" if effective_date else "collection_date_fallback"
 
     records = []
     for row in rows[1:]:
@@ -97,12 +92,11 @@ def _parse_standard_table(rows, category: str) -> list:
         currency_name = cells[1].strip() if len(cells) > 1 else None
         if not currency_code:
             continue
-
         buying = _safe_rate(cells[buy_idx])
         selling = _safe_rate(cells[sell_idx])
         if buying is None and selling is None:
             continue
-
+        key = f"{effective_date}:{currency_code}:{category}" if effective_date else None
         records.append(AdapterRecord(
             source_currency_code=currency_code,
             currency_name=currency_name or None,
@@ -110,12 +104,12 @@ def _parse_standard_table(rows, category: str) -> list:
             buying_rate=buying,
             selling_rate=selling,
             source_rate_text=f"{cells[buy_idx]}/{cells[sell_idx]}",
-            effective_date=None,
-            effective_date_basis="collection_date_fallback",
+            effective_date=effective_date,
+            effective_date_basis=date_basis,
             source_record_key=None,
-            source_publication_key=None,
+            source_publication_key=str(effective_date) if effective_date else None,
             raw_excerpt={"currency": currency_code, "buying": cells[buy_idx], "selling": cells[sell_idx]},
-            mapping_notes=["date_ambiguous:no_source_published_date_in_table"],
+            mapping_notes=[],
         ))
     return records
 
@@ -167,6 +161,19 @@ def _parse_weighted_table(rows) -> list:
             ),
         ))
     return records
+
+
+def _extract_date_from_text(text: str) -> Optional[date]:
+    """Extract date from page text e.g. 'October 14, 2026'."""
+    import re as _re
+    m = _re.search(r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}', text)
+    if m:
+        from datetime import datetime as _dt
+        raw = _re.sub(r'\s+', ' ', m.group(0).strip())
+        for fmt in ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y"):
+            try: return _dt.strptime(raw, fmt).date()
+            except ValueError: pass
+    return None
 
 
 def _extract_date(text: str) -> Optional[date]:

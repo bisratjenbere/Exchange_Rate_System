@@ -1,16 +1,16 @@
 """
-adapters/tsehay/adapter.py — Tsehay Bank (Type E-like, no date).
+adapters/tsehay/adapter.py — Tsehay Bank.
 
 Parse rules:
+- Date from "Daily Exchange Rate: Month DD, YYYY" heading.
 - Table 0: CURRENCY | CASH (Buying/Selling) | TRANSACTION (Buying/Selling)
-  Multi-level header: row 0 = category spans, row 1 = Buying/Selling labels.
-  Data rows start at row 2. col0=code, col1=cash_buy, col2=cash_sell, col3=txn_buy, col4=txn_sell.
 - Table 1: Currency (name) | Code | Buying | Selling → weighted_average.
-- No date → collection_date_fallback → identity_status=ambiguous.
 - "No Trade" → None.
 - Partial failure: returns (records, errors). Never raises.
 """
 import hashlib
+import re
+from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
 
@@ -25,6 +25,8 @@ SOURCE_URL = "https://tsehaybank.com.et/exchange-rate/"
 
 def parse(raw_html: str) -> tuple:
     soup = BeautifulSoup(raw_html, "html.parser")
+    effective_date = _parse_date(soup)
+    date_basis = "source_published" if effective_date else "collection_date_fallback"
     tables = soup.find_all("table")
     records, errors = [], []
 
@@ -32,7 +34,7 @@ def parse(raw_html: str) -> tuple:
         return [], ["table_0_cash_txn:missing", "table_1_weighted:missing"]
 
     try:
-        records.extend(_parse_cash_txn(tables[0]))
+        records.extend(_parse_cash_txn(tables[0], effective_date, date_basis))
     except Exception as exc:
         errors.append(f"table_0_cash_txn:{exc}")
 
@@ -40,14 +42,27 @@ def parse(raw_html: str) -> tuple:
         errors.append("table_1_weighted:missing")
     else:
         try:
-            records.extend(_parse_weighted(tables[1]))
+            records.extend(_parse_weighted(tables[1], effective_date, date_basis))
         except Exception as exc:
             errors.append(f"table_1_weighted:{exc}")
 
     return records, errors
 
 
-def _parse_cash_txn(table) -> list:
+def _parse_date(soup) -> Optional[date]:
+    """Extract date from 'Daily Exchange Rate: October 14, 2026' heading."""
+    text = soup.get_text(" ")
+    m = re.search(r'Daily Exchange Rate[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})', text)
+    if m:
+        for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y"):
+            try:
+                return datetime.strptime(m.group(1).strip(), fmt).date()
+            except ValueError:
+                continue
+    return None
+
+
+def _parse_cash_txn(table, effective_date, date_basis) -> list:
     rows = table.find_all("tr")
     # Skip header rows (rows without <td>)
     data_rows = [r for r in rows if r.find("td")]
@@ -64,11 +79,11 @@ def _parse_cash_txn(table) -> list:
             selling = _safe_rate(cells[si])
             if buying is None and selling is None:
                 continue
-            records.append(_make_record(currency_code, None, category, buying, selling, cells[bi], cells[si]))
+            records.append(_make_record(currency_code, None, category, buying, selling, cells[bi], cells[si], effective_date, date_basis))
     return records
 
 
-def _parse_weighted(table) -> list:
+def _parse_weighted(table, effective_date, date_basis) -> list:
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -84,11 +99,11 @@ def _parse_weighted(table) -> list:
         if buying is None and selling is None:
             continue
         records.append(_make_record(currency_code, currency_name or None, "weighted_average",
-                                    buying, selling, cells[2], cells[3]))
+                                    buying, selling, cells[2], cells[3], effective_date, date_basis))
     return records
 
 
-def _make_record(code, name, category, buying, selling, buy_text, sell_text):
+def _make_record(code, name, category, buying, selling, buy_text, sell_text, effective_date, date_basis):
     return AdapterRecord(
         source_currency_code=code,
         currency_name=name,
@@ -96,13 +111,13 @@ def _make_record(code, name, category, buying, selling, buy_text, sell_text):
         buying_rate=buying,
         selling_rate=selling,
         source_rate_text=f"{buy_text}/{sell_text}",
-        effective_date=None,
-        effective_date_basis="collection_date_fallback",
+        effective_date=effective_date,
+        effective_date_basis=date_basis,
         source_record_key=None,
-        source_publication_key=None,
+        source_publication_key=str(effective_date) if effective_date else None,
         unit_multiplier=1,
         raw_excerpt={"currency": code, "buying": buy_text, "selling": sell_text},
-        mapping_notes=["date_ambiguous:no_source_published_date"],
+        mapping_notes=[] if effective_date else ["date_ambiguous:no_source_published_date"],
     )
 
 

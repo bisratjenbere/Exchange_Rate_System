@@ -1,16 +1,16 @@
 """
-adapters/berhan/adapter.py — Berhan Bank (Type G text extraction).
+adapters/berhan/adapter.py — Berhan Bank (hidden input JSON).
 
 Parse rules:
-- No table. Rates in page text: "1 CODE (symbol) buying selling".
-- Date in text: "Oct 12, 2026" → source_published.
-- Pattern: "1 USD ($) 161.7225 164.9570"
-- Single buying/selling pair — category UNKNOWN (unconfirmed).
-- unit_multiplier = 1 (confirmed from "1 CODE" prefix).
-- "No Trade" → None.
+- Rates in hidden <input type="hidden"> tags with JSON values:
+  {"buying":"161.7225","selling":"164.9570","currency":"USD","currencyText":"1_USD_($)"}
+- Date in page text: "Oct 13, 2026" → source_published.
+- Single buying/selling pair per currency — category: transactional.
+- 6 currencies: USD, EUR, GBP, CAD, AED, YUA.
 - Partial failure: returns (records, errors). Never raises.
 """
 import hashlib
+import json
 import re
 from datetime import date
 from decimal import Decimal
@@ -31,48 +31,45 @@ _MONTH_MAP = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
-# Matches: "1 USD ($) 161.7225 164.9570" or "1 AED 44.0325 44.9131"
-_RATE_RE = re.compile(
-    r"1\s+([A-Z]{3})\s*(?:\([^)]*\))?\s+([\d.]+|No Trade)\s+([\d.]+|No Trade)",
-    re.IGNORECASE,
-)
 
-
-def parse(raw_html: str, category: str = "UNKNOWN") -> tuple:
+def parse(raw_html: str) -> tuple:
     soup = BeautifulSoup(raw_html, "html.parser")
     text = soup.get_text(" ", strip=True)
 
     effective_date = _extract_date(text)
     date_basis = "source_published" if effective_date else "collection_date_fallback"
 
+    inputs = [i for i in soup.find_all("input", type="hidden")
+              if i.get("value", "").startswith("{")]
+
     records, errors = [], []
-    seen = set()
-    for m in _RATE_RE.finditer(text):
-        code = m.group(1).upper()
-        if code in seen:
-            continue
-        seen.add(code)
+    for inp in inputs:
         try:
-            buying = _safe_rate(m.group(2))
-            selling = _safe_rate(m.group(3))
+            row = json.loads(inp["value"])
+            code = str(row.get("currency", "")).strip()
+            if not code:
+                continue
+            buying = _safe_rate(row.get("buying"))
+            selling = _safe_rate(row.get("selling"))
             if buying is None and selling is None:
                 continue
             records.append(AdapterRecord(
                 source_currency_code=code,
-                category=category,
+                category="transactional",
                 buying_rate=buying,
                 selling_rate=selling,
-                source_rate_text=f"{m.group(2)}/{m.group(3)}",
+                source_rate_text=f"{row.get('buying')}/{row.get('selling')}",
                 effective_date=effective_date,
                 effective_date_basis=date_basis,
                 source_record_key=None,
                 source_publication_key=None,
                 unit_multiplier=1,
-                raw_excerpt={"currency": code, "buying": m.group(2), "selling": m.group(3)},
-                mapping_notes=["category_unknown:single_pair_unconfirmed"],
+                raw_excerpt={"currency": code, "buying": row.get("buying"),
+                             "selling": row.get("selling")},
+                mapping_notes=[],
             ))
         except Exception as exc:
-            errors.append(f"currency:{code}:{exc}")
+            errors.append(f"input:{inp.get('id')}:{exc}")
 
     return records, errors
 
@@ -90,11 +87,9 @@ def _extract_date(text: str) -> Optional[date]:
         return None
 
 
-def _safe_rate(raw: str) -> Optional[Decimal]:
-    if not raw or raw.strip().lower() == "no trade":
-        return None
+def _safe_rate(raw) -> Optional[Decimal]:
     try:
-        return normalize_rate(raw.strip())
+        return normalize_rate(raw)
     except ValueError:
         return None
 
@@ -102,9 +97,9 @@ def _safe_rate(raw: str) -> Optional[Decimal]:
 def schema_fingerprint(raw_html: str) -> str:
     try:
         soup = BeautifulSoup(raw_html, "html.parser")
-        text = soup.get_text(" ", strip=True)
-        markers = ["Currency", "Buying", "Selling"]
-        present = [m for m in markers if m in text]
-        return hashlib.sha256(str(present).encode()).hexdigest()
+        inputs = [i for i in soup.find_all("input", type="hidden")
+                  if i.get("value", "").startswith("{")]
+        ids = sorted(i.get("id", "") for i in inputs)
+        return hashlib.sha256(str({"input_ids": ids}).encode()).hexdigest()
     except Exception:
         return hashlib.sha256(b"berhan:unparseable").hexdigest()

@@ -65,7 +65,7 @@ def _parse_row(row: dict) -> list:
 
     # ADR-013: updatedAt date part → source_inferred effective_date
     effective_date = _parse_updated_at(row.get("updatedAt"))
-    date_basis = "source_inferred" if effective_date else "unknown"
+    date_basis = "source_inferred" if effective_date else "collection_date_fallback"
 
     records = []
 

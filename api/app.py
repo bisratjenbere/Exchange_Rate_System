@@ -18,8 +18,16 @@ import os
 import decimal
 import datetime
 import json
+import logging
 import psycopg2
+from psycopg2 import pool
 from flask import Flask, jsonify, request, render_template, abort
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("api")
 
 from trusted_view.query import (
     get_trusted_rates,
@@ -32,21 +40,56 @@ from trusted_view.query import (
     get_available_dates,
     get_history_by_currency,
     get_search_suggestions,
+    get_pending_review_observations,
     MAJOR_CURRENCIES,
 )
 
 app = Flask(__name__)
 
-# Handle different DATABASE_URL formats (Render uses postgres://, psycopg2 needs postgresql://)
+# ── Environment validation ─────────────────────────────────────────────────────
 DSN = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
 if DSN.startswith("postgres://"):
     DSN = DSN.replace("postgres://", "postgresql://", 1)
+
+DB_CONNECT_TIMEOUT = int(os.environ.get("DB_CONNECT_TIMEOUT", "5"))   # seconds
+DB_STATEMENT_TIMEOUT = int(os.environ.get("DB_STATEMENT_TIMEOUT", "10000"))  # ms
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
+
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGINS
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
+
+def _make_pool():
+    dsn_with_timeout = f"{DSN} connect_timeout={DB_CONNECT_TIMEOUT} options='-c statement_timeout={DB_STATEMENT_TIMEOUT}'"
+    return pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=dsn_with_timeout)
+
+
+try:
+    _pool = _make_pool()
+except Exception as exc:
+    logger.error("Failed to create DB connection pool at startup: %s", exc)
+    _pool = None
 
 PAGE_SIZE = 25
 
 
 def _conn():
-    return psycopg2.connect(DSN)
+    if _pool is None:
+        raise RuntimeError("Database connection pool is not available")
+    return _pool.getconn()
+
+
+def _put(conn):
+    try:
+        _pool.putconn(conn)
+    except Exception:
+        pass  # mock connections in tests are not pool-managed
 
 
 def _serialise(obj):
@@ -68,42 +111,72 @@ def _json(data):
 
 @app.get("/health")
 def health():
+    conn = None
     try:
-        with _conn() as conn, conn.cursor() as cur:
+        conn = _conn()
+        with conn.cursor() as cur:
             cur.execute("SELECT 1")
-        return jsonify({"status": "ok"})
+            cur.execute("SELECT COUNT(*) FROM rate_observation WHERE is_current = TRUE")
+            current_rates = cur.fetchone()[0]
+        return jsonify({"status": "ok", "current_rates": current_rates})
     except Exception as exc:
-        return jsonify({"status": "error", "detail": str(exc)}), 503
+        logger.error("Health check failed: %s", exc)
+        return jsonify({"status": "error"}), 503
+    finally:
+        if conn:
+            _put(conn)
 
 
 @app.get("/banks")
 def banks():
+    conn = None
     try:
-        with _conn() as conn:
-            rows = get_available_banks(conn)
+        conn = _conn()
+        rows = get_available_banks(conn)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.error("GET /banks failed: %s", exc)
+        return jsonify({"error": "internal server error"}), 500
+    finally:
+        if conn:
+            _put(conn)
     return _json(rows)
 
 
 @app.get("/rates")
 def rates():
     source_id = request.args.get("source_id", type=int)
+    as_of = request.args.get("as_of", "").strip()
+    as_of_date = None
+    if as_of:
+        try:
+            as_of_date = datetime.date.fromisoformat(as_of)
+        except ValueError:
+            return jsonify({"error": "invalid as_of date, use YYYY-MM-DD"}), 400
+    conn = None
     try:
-        with _conn() as conn:
-            rows = get_trusted_rates(conn, source_id=source_id)
+        conn = _conn()
+        rows = get_trusted_rates(conn, source_id=source_id, as_of=as_of_date)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.error("GET /rates failed: %s", exc)
+        return jsonify({"error": "internal server error"}), 500
+    finally:
+        if conn:
+            _put(conn)
     return _json(rows)
 
 
 @app.get("/rates/by-currency/<code>")
 def rates_by_currency(code: str):
+    conn = None
     try:
-        with _conn() as conn:
-            rows = get_trusted_rates_by_currency(conn, code.upper())
+        conn = _conn()
+        rows = get_trusted_rates_by_currency(conn, code.upper())
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.error("GET /rates/by-currency/%s failed: %s", code, exc)
+        return jsonify({"error": "internal server error"}), 500
+    finally:
+        if conn:
+            _put(conn)
     if not rows:
         abort(404)
     return _json(rows)
@@ -111,14 +184,80 @@ def rates_by_currency(code: str):
 
 @app.get("/rates/<int:source_id>")
 def rates_for_source(source_id: int):
+    conn = None
     try:
-        with _conn() as conn:
-            rows = get_trusted_rates(conn, source_id=source_id)
+        conn = _conn()
+        rows = get_trusted_rates(conn, source_id=source_id)
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        logger.error("GET /rates/%s failed: %s", source_id, exc)
+        return jsonify({"error": "internal server error"}), 500
+    finally:
+        if conn:
+            _put(conn)
     if not rows:
         abort(404)
     return _json(rows)
+
+
+# ── Review UI ─────────────────────────────────────────────────────────────────
+
+@app.get("/review")
+def review():
+    conn = None
+    try:
+        conn = _conn()
+        pending = get_pending_review_observations(conn)
+    except Exception as exc:
+        pending = []
+    finally:
+        if conn:
+            _put(conn)
+    return render_template("review.html", pending=pending, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+
+
+@app.post("/review/decide")
+def review_decide():
+    obs_ids = request.form.getlist("obs_id", type=int)
+    decision = request.form.get("decision")  # approve | dismiss
+    if not obs_ids or decision not in ("approve", "dismiss"):
+        return jsonify({"error": "bad request"}), 400
+
+    conn = None
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            if decision == "approve":
+                for oid in obs_ids:
+                    cur.execute("""
+                        UPDATE rate_observation old
+                        SET is_current = FALSE
+                        FROM rate_observation new
+                        WHERE old.logical_observation_key = new.logical_observation_key
+                          AND new.id = %s
+                          AND old.id != new.id
+                          AND old.is_current = TRUE
+                    """, (oid,))
+                    cur.execute("""
+                        UPDATE rate_observation
+                        SET is_current = TRUE, change_review_status = 'new_publication'
+                        WHERE id = %s
+                    """, (oid,))
+            else:
+                cur.execute("""
+                    UPDATE rate_observation
+                    SET change_review_status = 'dismissed'
+                    WHERE id = ANY(%s)
+                """, (obs_ids,))
+        conn.commit()
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        logger.error("POST /review/decide failed: %s", exc)
+        return jsonify({"error": "internal server error"}), 500
+    finally:
+        if conn:
+            _put(conn)
+    return __import__('flask').redirect("/review")
 
 
 # ── UI ─────────────────────────────────────────────────────────────────────────
@@ -150,59 +289,62 @@ def ui():
         # will be resolved in template via datalist; pass through as-is
         search_redirect = q
 
+    conn = None
     try:
-        with _conn() as conn:
-            currencies   = get_available_currencies(conn)
-            banks        = get_available_banks(conn)
-            suggestions  = get_search_suggestions(conn)
+        conn = _conn()
+        currencies   = get_available_currencies(conn)
+        banks        = get_available_banks(conn)
+        suggestions  = get_search_suggestions(conn)
+        dates = get_available_dates(conn)
 
-            dates = get_available_dates(conn)
+        if view == "compare":
+            if q and q in currencies:
+                currency = q
+            rows        = get_best_rates_by_currency(conn, currency)
+            bank_data   = None
+            matrix      = None
+            hist_rows   = []
 
-            if view == "compare":
-                if q and q in currencies:
-                    currency = q
-                rows        = get_best_rates_by_currency(conn, currency)
-                bank_data   = None
-                matrix      = None
-                hist_rows   = []
+        elif view == "history":
+            if q and q in currencies:
+                currency = q
+            hist_rows = get_history_by_currency(conn, currency, sel_date)
+            rows, bank_data, matrix = [], None, None
 
-            elif view == "history":
-                if q and q in currencies:
-                    currency = q
-                hist_rows = get_history_by_currency(conn, currency, sel_date)
-                rows, bank_data, matrix = [], None, None
+        elif view == "bank":
+            if q and not source_id:
+                match = next((b for b in banks if q in b["name"].upper()), None)
+                if match:
+                    source_id = match["id"]
+            rows      = []
+            hist_rows = []
+            bank_data = get_bank_rates_pivoted(conn, source_id) if source_id else {}
+            matrix    = None
 
-            elif view == "bank":
-                if q and not source_id:
-                    match = next((b for b in banks if q in b["name"].upper()), None)
-                    if match:
-                        source_id = match["id"]
-                rows      = []
-                hist_rows = []
-                bank_data = get_bank_rates_pivoted(conn, source_id) if source_id else {}
-                matrix    = None
+            if bank_data and bank_data.get("currencies"):
+                curs = bank_data["currencies"]
+                if major_only:
+                    curs = {c: v for c, v in curs.items() if c in MAJOR_CURRENCIES}
+                if q and q not in currencies:
+                    curs = {c: v for c, v in curs.items() if q in c}
+                bank_data["currencies"] = curs
 
-                # apply filter + search to bank currencies
-                if bank_data and bank_data.get("currencies"):
-                    curs = bank_data["currencies"]
-                    if major_only:
-                        curs = {c: v for c, v in curs.items() if c in MAJOR_CURRENCIES}
-                    if q and q not in currencies:  # q is a currency filter
-                        curs = {c: v for c, v in curs.items() if q in c}
-                    bank_data["currencies"] = curs
-
-            else:  # all
-                rows      = []
-                bank_data = None
-                hist_rows = []
-                matrix    = get_currency_matrix(conn, major_only=major_only)
-                if q and matrix:
-                    matrix["currencies"] = [c for c in matrix["currencies"] if q in c]
+        else:  # all
+            rows      = []
+            bank_data = None
+            hist_rows = []
+            matrix    = get_currency_matrix(conn, major_only=major_only)
+            if q and matrix:
+                matrix["currencies"] = [c for c in matrix["currencies"] if q in c]
 
     except Exception as exc:
+        logger.error("GET / (view=%s) failed: %s", view, exc)
         rows, currencies, banks, suggestions = [], [], [], {"currencies": [], "banks": []}
         bank_data, matrix, hist_rows, dates = {}, None, [], []
-        error = str(exc)
+        error = "Failed to load data. Please try again."
+    finally:
+        if conn:
+            _put(conn)
 
     # bar chart scale for compare view
     max_buying = None
@@ -217,6 +359,8 @@ def ui():
     hist_by_date = {}
     for r in hist_rows:
         d = r["effective_date"]
+        if d is None:
+            continue
         hist_by_date.setdefault(d, []).append(r)
 
     return render_template(

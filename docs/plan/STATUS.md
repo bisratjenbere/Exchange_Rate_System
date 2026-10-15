@@ -275,7 +275,200 @@ Priority order: CBE (id=1), DBE (id=12), Rammis (id=21), Sidama (id=22), Wegagen
 
 ---
 
+## Session 3 — 2026-10-14
 
+### Production operations, bug fixes, data quality
+
+---
+
+#### 1. Schema-change failures on startup (4 sources)
+
+**Problem**: Sources 2 (Dashen), 5 (BOA), 11 (CBO), 18 (NIB) failed with `schema_change` error on first run of the day. Banks had updated their page structure overnight.
+
+**Fix**: Reset schema fingerprints to force re-learning on next run:
+```sql
+UPDATE rate_source SET schema_fingerprint = NULL WHERE id IN (2, 5, 11, 18);
+```
+All 4 recovered on re-run.
+
+---
+
+#### 2. Anbesa Playwright fix
+
+**Problem**: Anbesa adapter using `wait_until="domcontentloaded"` — page JS not finishing before scrape.
+
+**Fix**: Changed to `wait_until="commit"` + `page.wait_for_timeout(5000)` in `adapters/anbesa/adapter.py`.
+
+Anbesa now collects successfully (run 473).
+
+---
+
+#### 3. History view 500 error (two bugs)
+
+**Bug 1**: `get_available_dates()` in `trusted_view/query.py` returning `None` values from DB rows with no effective_date.
+**Fix**: Added `if r[0] is not None` filter.
+
+**Bug 2**: `hist_by_date` dict in `api/app.py` building with `None` key when effective_date was NULL.
+**Fix**: Added `if d is None: continue` guard in the date-grouping loop.
+
+---
+
+#### 4. Pending review blocking stale data (5 banks)
+
+**Problem**: Wegagen, BOA, Rammis, Tsedey, Zemen had `change_review_status='pending_review'` observations with `is_current=FALSE` blocking the trusted view. Old `is_current=TRUE` records were from days prior.
+
+**Root cause**: Rate changes trigger `pending_review` + `is_current=FALSE` on the new record. The old record stays `is_current=TRUE`. The new record never becomes current until manually approved.
+
+**Fix**: Manually approved all by superseding old records and setting new to `is_current=TRUE, change_review_status='new_publication'`.
+
+**Review UI built** to prevent this needing manual SQL in future:
+- `GET /review` — per-bank grouped table, old/new rate comparison, change % display
+- `POST /review/decide` — approve/dismiss per observation
+- `get_pending_review_observations()` added to `trusted_view/query.py`
+- `api/templates/review.html` — checkboxes, select-all, per-bank selection
+
+---
+
+#### 5. Mass date-parsing fix (8 adapters)
+
+**Problem**: 8 adapters had no date parser — all producing `collection_date_fallback`. Checked all 29 banks.
+
+**Banks fixed** (added `_parse_date()` with month-name regex):
+- `adapters/tsehay/adapter.py` — parses `"Daily Exchange Rate: October 14, 2026"` heading
+- `adapters/siket/adapter.py` — fully rewritten with date parser
+- `adapters/goh_betoch/adapter.py` — fully rewritten with date parser
+- `adapters/hibret/adapter.py` — fully rewritten with date parser (SSL_VERIFY=False retained)
+- `adapters/amhara/adapter.py` — fully rewritten, double-space handling via `re.sub(r'\s+', ' ', ...)`
+- `adapters/dashen/adapter.py` — added `_extract_date_from_text()` for page-level date
+
+**Banks confirmed no date on page** (permanently `collection_date_fallback`):
+- Bunna, Siinqee, Global — pages genuinely have no date text
+
+---
+
+#### 6. source_record_key duplicate is_current bug
+
+**Problem**: After adding date parsing, adapters were setting `source_record_key=f"{effective_date}:{code}:{category}"`. This caused `build_identity` to use the `source_record_key` path, generating key `26:2026-10-14:AED:cash:cash` instead of standard `26:AED:cash:2026-10-14`. Old fallback records had key `26:AED:cash:2026-10-13` — different logical keys, so both were `is_current=TRUE` simultaneously.
+
+**Fix**: Set `source_record_key=None` in all 6 affected adapters (tsehay, siket, goh_betoch, hibret, amhara, dashen).
+
+**DB cleanup**: Retired old fallback `is_current=TRUE` records:
+```sql
+UPDATE rate_observation SET is_current=FALSE
+WHERE source_id=X AND effective_date_basis='collection_date_fallback' AND is_current=TRUE;
+```
+Reset schema fingerprints and re-ran all 6 adapters. Final state: all 6 banks on `2026-10-14`, `source_published`, zero fallback records.
+
+---
+
+#### 7. Widespread duplicate is_current bug (root cause fix)
+
+**Problem**: `build_identity` generates a date-scoped key `{source_id}:{currency}:{category}:{date}`. Each new day = new logical key = `"new"` action = `is_current=TRUE` inserted without retiring the previous day's record. This affected **all banks** — 457 stale duplicate `is_current=TRUE` records accumulated across CBE, DBE, BOA, NIB, SIDAMA, RAMMIS, AWASH, BERHAN, CBO, ZAMZAM, ZEMEN, WEGAGEN, ENAT, DASHEN, AHADU, SIKET, OMO, GLOBAL, SIINQEE, ADIB.
+
+**Root cause**: `pipeline/ingest.py` `_process_one()` — when action=`"new"` with a fresh date key, it inserted `is_current=TRUE` without checking for older current records for the same source/currency/category slot.
+
+**Fix**: Added `_retire_older_current()` helper in `pipeline/ingest.py`:
+```python
+def _retire_older_current(conn, source_id, currency_code, category_id, logical_key):
+    # Retires any is_current=TRUE records for same source/currency/category
+    # with a different logical key (older date)
+    UPDATE rate_observation SET is_current=FALSE
+    WHERE source_id=%s AND source_currency_code=%s
+      AND category_id IS NOT DISTINCT FROM %s
+      AND is_current=TRUE AND logical_observation_key != %s
+```
+Called before `insert_observation()` whenever `is_current=True` and `action="new"`.
+
+**DB cleanup**: One-shot SQL retired all 457 existing stale duplicates:
+```sql
+WITH ranked AS (
+  SELECT id,
+    ROW_NUMBER() OVER (
+      PARTITION BY source_id, source_currency_code, category_id
+      ORDER BY effective_date DESC NULLS LAST, id DESC
+    ) AS rn
+  FROM rate_observation WHERE is_current = TRUE
+)
+UPDATE rate_observation SET is_current = FALSE
+WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+```
+
+**Verified**: 0 duplicates after fix. Full 30-source run confirmed no new duplicates created.
+
+---
+
+#### 8. Genuinely stale banks (bank-side, not fixable)
+
+Confirmed by live page inspection:
+
+| Bank | Latest Effective | Reason |
+|------|-----------------|--------|
+| Omo | 2026-10-12 | Website shows `12/10/2026` — bank hasn't updated |
+| Abay | 2026-10-13 | `dateModified: 2026-10-13` in page meta — bank hasn't updated |
+| Gadaa | 2026-10-13 | Bank hasn't updated |
+| ADIB | 2026-09-30 | API broken — fetched Oct 12 but data is Sep 30 |
+| Shabelle | 2026-10-08 | Infrequent updates — bank-side |
+| Anbesa | no data | Collection failing |
+| Oromia | no data | DNS down (known) |
+
+---
+
+#### 9. PROVISIONAL badge — all banks
+
+**Finding**: All 31 enabled sources have `verification_status='unverified'`. The `_to_row()` function in `trusted_view/query.py` marks `is_provisional=True` for both `'unverified'` and `'provisional'`. So every bank shows PROVISIONAL in the UI.
+
+**This is by design** — zero-trust policy. No bank has been manually verified yet.
+
+**To remove PROVISIONAL for a bank**: visit the bank website, confirm rates match UI, then:
+```sql
+UPDATE rate_source SET verification_status = 'verified' WHERE id = <id>;
+```
+
+---
+
+#### 10. Production state — end of 2026-10-14
+
+**Collection results**: 30/31 sources succeeded. 1 failed (source 49 = Oromia, DNS down).
+
+| Category | Banks | Count |
+|----------|-------|-------|
+| ✅ Oct 14, collecting fresh | CBE, DBE, BOA, NIB, SIDAMA, RAMMIS, AWASH, BERHAN, CBO, ZAMZAM, ZEMEN, WEGAGEN, ENAT, DASHEN, AHADU, SIKET, TSEDEY, TSEHAY, AMHARA, HIBRET, GOH_BETOCH, BUNNA, GLOBAL, SIINQEE, ANBESA | 26 |
+| ⚠️ Stale (bank-side) | Omo (Oct 12), Abay (Oct 13), Gadaa (Oct 13), ADIB (Sep 30), Shabelle (Oct 8) | 5 |
+| ❌ No data | Oromia (DNS), Anbesa (failing) | 2 |
+
+**Total current trusted records**: ~296 across 26 active banks.
+
+**All 31 sources**: `verification_status='unverified'` → PROVISIONAL badge showing for all.
+
+---
+
+#### 11. Known permanent limitations
+
+- **Bunna, Siinqee, Global**: No date on page — permanently `collection_date_fallback`. Each day creates a new logical key; unchanged rates become orphaned when old date's records are retired. Workaround: manually re-promote old records when rates unchanged.
+- **Oromia**: DNS failure — domain does not resolve. Needs manual investigation.
+- **ADIB**: API endpoint returning Sep 30 data. Needs re-inspection.
+- **Telegram scraping**: Investigated. Ethiopian bank Telegram channels either don't post rate numbers or are private. Not viable.
+
+---
+
+#### 12. Files changed this session
+
+| File | Change |
+|------|--------|
+| `pipeline/ingest.py` | Added `_retire_older_current()` — fixes duplicate is_current bug |
+| `trusted_view/query.py` | Fixed `get_available_dates()` None filter; added `get_pending_review_observations()` |
+| `api/app.py` | Fixed hist_by_date None key crash; added `GET /review`, `POST /review/decide` |
+| `api/templates/index.html` | Added Review nav tab |
+| `api/templates/review.html` | NEW — review UI |
+| `adapters/tsehay/adapter.py` | Added `_parse_date()`, `source_record_key=None` |
+| `adapters/siket/adapter.py` | Fully rewritten, `_parse_date()`, `source_record_key=None` |
+| `adapters/goh_betoch/adapter.py` | Fully rewritten, `_parse_date()`, `source_record_key=None` |
+| `adapters/hibret/adapter.py` | Fully rewritten, `_parse_date()`, `source_record_key=None` |
+| `adapters/amhara/adapter.py` | Fully rewritten, `_parse_date()`, `source_record_key=None` |
+| `adapters/dashen/adapter.py` | Added `_extract_date_from_text()`, `source_record_key=None` |
+| `adapters/anbesa/adapter.py` | `wait_until="commit"` + 5s timeout |
+
+---
 
 | Milestone | Status | Date |
 |-----------|--------|------|

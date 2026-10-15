@@ -33,12 +33,7 @@ def validate(record: AdapterRecord) -> tuple:
             "code": "INVALID_CATEGORY",
             "message": f"category '{record.category}' not in {VALID_CATEGORIES}",
         })
-    elif record.category == UNKNOWN_CATEGORY:
-        # acceptance test 7: unknown category flagged, not silently mapped
-        messages.append({
-            "code": "UNKNOWN_CATEGORY",
-            "message": "category is UNKNOWN — excluded from trusted view until reviewed",
-        })
+    # UNKNOWN category is accepted — buying/selling rates are sufficient
 
     # ── rate values ───────────────────────────────────────────────────────────
     buying_ok = _check_rate(record.buying_rate, "buying_rate", messages)

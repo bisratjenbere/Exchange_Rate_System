@@ -12,5 +12,8 @@ lxml==4.9.3
 # HTTP Requests
 requests==2.31.0
 
+# Browser Automation (for JS-rendered sources)
+playwright==1.44.0
+
 # Testing (optional but recommended)
 pytest==7.4.3

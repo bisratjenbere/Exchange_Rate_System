@@ -50,7 +50,8 @@ _TRUSTED_SELECT = """
               AND cc.status = 'open'
         )                               AS has_pending_review,
         (o.fetched_at::date - o.effective_date) > 3
-                                        AS staleness_warning
+                                        AS staleness_warning,
+        (CURRENT_DATE - o.effective_date)  AS days_stale
     FROM rate_observation o
     JOIN rate_source rs ON rs.id = o.source_id
     JOIN bank b ON b.id = rs.bank_id
@@ -64,17 +65,20 @@ def _to_row(cols, row):
     return d
 
 
-def get_trusted_rates(conn, source_id: Optional[int] = None) -> list:
+def get_trusted_rates(conn, source_id: Optional[int] = None, as_of=None) -> list:
     """
     Return trusted current rates as a list of dicts.
-    Each dict includes bank_name, bank_code plus all observation fields.
-    Acceptance tests 19-22. Gap review C, L.
+    as_of: optional date — return rates whose effective_date <= as_of
+           (latest version per logical key as of that date).
     """
     params = []
     extra = ""
     if source_id is not None:
-        extra = "AND o.source_id = %s"
+        extra += " AND o.source_id = %s"
         params.append(source_id)
+    if as_of is not None:
+        extra += " AND o.effective_date <= %s"
+        params.append(as_of)
 
     query = f"{_TRUSTED_SELECT} WHERE {_TRUSTED_WHERE} {extra} ORDER BY b.name, rc.code, o.source_currency_code"
 
@@ -260,7 +264,7 @@ def get_available_dates(conn) -> list:
               AND rs.is_enabled = TRUE
             ORDER BY o.effective_date DESC
         """)
-        return [r[0] for r in cur.fetchall()]
+        return [r[0] for r in cur.fetchall() if r[0] is not None]
 
 
 def get_history_by_currency(conn, currency_code: str, effective_date=None) -> list:
@@ -342,6 +346,41 @@ def get_available_banks(conn) -> list:
             ORDER BY b.name
         """)
         return [{"id": r[0], "name": r[1]} for r in cur.fetchall()]
+
+
+def get_pending_review_observations(conn) -> list:
+    """
+    Review UI: all observations with change_review_status='pending_review',
+    joined with their prior version for rate comparison.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                o.id,
+                o.source_id,
+                b.name                  AS bank_name,
+                o.source_currency_code,
+                rc.code                 AS category,
+                o.buying_rate,
+                o.selling_rate,
+                o.effective_date,
+                o.fetched_at,
+                prev.buying_rate        AS prev_buying,
+                prev.selling_rate       AS prev_selling,
+                prev.effective_date     AS prev_date
+            FROM rate_observation o
+            JOIN rate_source rs ON rs.id = o.source_id
+            JOIN bank b ON b.id = rs.bank_id
+            LEFT JOIN rate_category rc ON rc.id = o.category_id
+            LEFT JOIN rate_observation prev
+                ON prev.logical_observation_key = o.logical_observation_key
+                AND prev.is_current = TRUE
+                AND prev.id != o.id
+            WHERE o.change_review_status = 'pending_review'
+            ORDER BY b.name, o.source_currency_code, rc.code
+        """)
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
 def get_observation_with_warnings(conn, logical_key: str) -> Optional[dict]:

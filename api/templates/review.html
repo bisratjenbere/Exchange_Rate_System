@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review Pending Rates</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f4f6f9; color: #1a1a1a; font-size: 0.9rem; }
+
+    header { background: #1a3a5c; color: #fff; padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+    header h1 { font-size: 1.05rem; font-weight: 700; flex: 1; }
+    .updated { font-size: 0.72rem; opacity: 0.6; }
+
+    nav { background: #fff; border-bottom: 2px solid #e8edf2; padding: 0 1.5rem; display: flex; gap: 0; }
+    nav a { display: inline-block; padding: 0.7rem 1.2rem; text-decoration: none; color: #666; border-bottom: 3px solid transparent; font-size: 0.85rem; font-weight: 500; margin-bottom: -2px; }
+    nav a.active { color: #1a3a5c; border-bottom-color: #1a3a5c; }
+    nav a:hover { color: #1a3a5c; }
+    .badge-count { background: #e74c3c; color: #fff; border-radius: 10px; padding: 0.1rem 0.4rem; font-size: 0.65rem; font-weight: 700; margin-left: 0.3rem; }
+
+    main { padding: 1.25rem 1.5rem; }
+    .empty { color: #888; padding: 3rem 0; text-align: center; font-size: 0.95rem; }
+
+    .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .btn { padding: 0.4rem 1rem; border: none; border-radius: 4px; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+    .btn-approve { background: #27ae60; color: #fff; }
+    .btn-approve:hover { background: #219a52; }
+    .btn-dismiss { background: #e74c3c; color: #fff; }
+    .btn-dismiss:hover { background: #c0392b; }
+    .btn-secondary { background: #e8edf2; color: #555; }
+    .btn-secondary:hover { background: #d0d8e0; }
+    .select-info { font-size: 0.78rem; color: #888; }
+
+    .group { margin-bottom: 1.5rem; }
+    .group-header {
+      background: #1a3a5c; color: #fff;
+      padding: 0.5rem 1rem; font-size: 0.82rem; font-weight: 700;
+      border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 0.75rem;
+    }
+    .group-header .count { font-weight: 400; opacity: 0.7; font-size: 0.72rem; }
+
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    table:last-child { border-radius: 0 0 6px 6px; overflow: hidden; }
+    th {
+      background: #f7f9fb; color: #666; font-size: 0.72rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 0.5rem 0.75rem; text-align: right; border-bottom: 1px solid #e8edf2;
+    }
+    th:first-child, th.left { text-align: left; }
+    td { padding: 0.45rem 0.75rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+    td:first-child { text-align: left; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafbfc; }
+
+    .cur { font-weight: 700; color: #1a3a5c; }
+    .cat { font-size: 0.72rem; color: #999; }
+    .rate-new { font-weight: 700; color: #1a3a5c; }
+    .rate-old { color: #aaa; font-size: 0.78rem; }
+    .change-up   { color: #27ae60; font-size: 0.75rem; font-weight: 600; }
+    .change-down { color: #e74c3c; font-size: 0.75rem; font-weight: 600; }
+    .change-flat { color: #bbb;    font-size: 0.75rem; }
+    .date { font-size: 0.75rem; color: #999; }
+
+    input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color: #1a3a5c; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🇪🇹 Ethiopian Bank Exchange Rates</h1>
+  <span class="updated">{{ now.strftime('%d %b %Y, %H:%M UTC') }}</span>
+</header>
+
+<nav>
+  <a href="/?view=compare">Compare Banks</a>
+  <a href="/?view=bank">By Bank</a>
+  <a href="/?view=all">All Rates</a>
+  <a href="/?view=history">History</a>
+  <a href="/review" class="active">
+    Review
+    {% if pending %}<span class="badge-count">{{ pending|length }}</span>{% endif %}
+  </a>
+</nav>
+
+<main>
+{% if not pending %}
+  <p class="empty">✅ Nothing to review — all rates are current.</p>
+{% else %}
+
+<form method="post" action="/review/decide" id="review-form">
+
+  <div class="toolbar">
+    <button type="button" class="btn btn-secondary" onclick="toggleAll(true)">Select All</button>
+    <button type="button" class="btn btn-secondary" onclick="toggleAll(false)">Deselect All</button>
+    <span class="select-info" id="sel-count">0 selected</span>
+    <div style="margin-left:auto;display:flex;gap:0.5rem">
+      <button type="submit" name="decision" value="approve" class="btn btn-approve"
+              onclick="return confirm('Approve selected rates?')">
+        ✅ Approve Selected
+      </button>
+      <button type="submit" name="decision" value="dismiss" class="btn btn-dismiss"
+              onclick="return confirm('Dismiss selected rates? Old rates will stay current.')">
+        ❌ Dismiss Selected
+      </button>
+    </div>
+  </div>
+
+  {% set ns = namespace(current_bank='') %}
+  {% for r in pending %}
+    {% if r.bank_name != ns.current_bank %}
+      {% if ns.current_bank != '' %}</table></div>{% endif %}
+      {% set ns.current_bank = r.bank_name %}
+      <div class="group">
+      <div class="group-header">
+        {{ r.bank_name }}
+        <span class="count">
+          {{ pending | selectattr('bank_name', 'equalto', r.bank_name) | list | length }} currencies pending
+        </span>
+        <button type="button" class="btn btn-secondary" style="margin-left:auto;padding:0.2rem 0.6rem;font-size:0.72rem"
+                onclick="toggleBank('{{ r.bank_name | replace(' ', '_') }}', true)">Select bank</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th class="left" style="width:2rem"><input type="checkbox" onclick="toggleBank('{{ r.bank_name | replace(' ', '_') }}', this.checked)"></th>
+            <th class="left">Currency</th>
+            <th class="left">Category</th>
+            <th>New Buying</th>
+            <th>Old Buying</th>
+            <th>Change</th>
+            <th>New Selling</th>
+            <th>Old Selling</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+    {% endif %}
+
+    {% set buy_chg = ((r.buying_rate - r.prev_buying) / r.prev_buying * 100) if r.buying_rate and r.prev_buying else none %}
+    <tr>
+      <td><input type="checkbox" name="obs_id" value="{{ r.id }}"
+                 class="cb bank-{{ r.bank_name | replace(' ', '_') }}"
+                 onchange="updateCount()"></td>
+      <td class="cur">{{ r.source_currency_code }}</td>
+      <td class="cat">{{ r.category or '—' }}</td>
+      <td class="rate-new">{{ '%.4f' % r.buying_rate if r.buying_rate else '—' }}</td>
+      <td class="rate-old">{{ '%.4f' % r.prev_buying if r.prev_buying else '—' }}</td>
+      <td>
+        {% if buy_chg is not none %}
+          {% if buy_chg > 0.01 %}
+            <span class="change-up">▲ {{ '%.2f' % buy_chg }}%</span>
+          {% elif buy_chg < -0.01 %}
+            <span class="change-down">▼ {{ '%.2f' % (buy_chg | abs) }}%</span>
+          {% else %}
+            <span class="change-flat">≈ 0%</span>
+          {% endif %}
+        {% else %}
+          <span class="change-flat">new</span>
+        {% endif %}
+      </td>
+      <td class="rate-new">{{ '%.4f' % r.selling_rate if r.selling_rate else '—' }}</td>
+      <td class="rate-old">{{ '%.4f' % r.prev_selling if r.prev_selling else '—' }}</td>
+      <td class="date">{{ r.effective_date.strftime('%d %b') if r.effective_date else '—' }}</td>
+    </tr>
+
+  {% endfor %}
+  </tbody></table></div>
+
+</form>
+{% endif %}
+</main>
+
+<script>
+function updateCount() {
+  const n = document.querySelectorAll('input[name=obs_id]:checked').length;
+  document.getElementById('sel-count').textContent = n + ' selected';
+}
+function toggleAll(checked) {
+  document.querySelectorAll('input[name=obs_id]').forEach(cb => cb.checked = checked);
+  updateCount();
+}
+function toggleBank(bankClass, checked) {
+  document.querySelectorAll('.bank-' + bankClass).forEach(cb => cb.checked = checked);
+  updateCount();
+}
+</script>
+</body>
+</html>

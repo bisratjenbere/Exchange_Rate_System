@@ -44,9 +44,25 @@ def normalize_rate(raw: object) -> Optional[Decimal]:
     return d
 
 
+_PAREN_CODE_RE = __import__('re').compile(r'\(\s*([A-Z]{3})\s*\)', __import__('re').IGNORECASE)
+
+
 def normalize_currency_code(raw: Optional[str]) -> Optional[str]:
-    """Strip and upper-case a currency code; return None if empty."""
+    """Extract and return a 3-letter ISO currency code, or None.
+    Handles: 'USD', 'Chinese Yuan (CNY)', 'China ( CNY)' etc.
+    Returns None if no valid 3-letter code can be extracted.
+    """
     if not raw:
         return None
     cleaned = raw.strip().upper()
-    return cleaned if cleaned else None
+    if not cleaned:
+        return None
+    # Already a clean 3-letter code
+    if len(cleaned) == 3 and cleaned.isalpha():
+        return cleaned
+    # Extract from parentheses: 'China ( CNY)' → 'CNY'
+    m = _PAREN_CODE_RE.search(cleaned)
+    if m:
+        return m.group(1).upper()
+    # Not a valid ISO code — preserve source_currency_code but return None for currency_code
+    return None

@@ -118,7 +118,13 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         is_current = False
         change_review_status = ChangeReviewStatus.PENDING_REVIEW
 
-    # 7. Insert observation
+    # 7. Retire any older is_current records for same source/currency/category
+    #    before inserting, so we never have two is_current=TRUE for the same slot.
+    if is_current and action == "new" and logical_key is not None:
+        _retire_older_current(conn, source_id, record.source_currency_code,
+                              category_id, logical_key)
+
+    # 8. Insert observation
     obs_id = insert_observation(
         conn=conn,
         record=record,
@@ -136,18 +142,19 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         change_review_status=change_review_status,
     )
 
-    # 8. Create change_candidate for changed observations
+    # 9. Create change_candidate for changed observations
+    #    Skip if rates are identical — same-rate candidates are noise.
     if action == "changed" and existing_id is not None:
-        insert_change_candidate(conn, obs_id, existing_id, source_id)
-        result.candidates += 1
+        if not _is_same_rate(conn, obs_id, existing_id):
+            insert_change_candidate(conn, obs_id, existing_id, source_id)
+            result.candidates += 1
 
-    # 9. Update counts
+    # 10. Update counts
     if val_status == ValidationStatus.REJECTED:
         result.rejected += 1
     elif (action == "changed"
           or val_status == ValidationStatus.WARNING
-          or identity_status == IdentityStatus.AMBIGUOUS
-          or category_id is None):
+          or identity_status == IdentityStatus.AMBIGUOUS):
         result.flagged += 1
     else:
         result.accepted += 1
@@ -158,3 +165,35 @@ def _load_category_map(conn) -> dict:
     with conn.cursor() as cur:
         cur.execute("SELECT code, id FROM rate_category WHERE is_active = TRUE")
         return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _retire_older_current(conn, source_id: int, currency_code: str,
+                          category_id, logical_key: str):
+    """Retire any is_current=TRUE records for the same source/currency/category
+    that have a different logical key (i.e. an older date's record)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """UPDATE rate_observation
+               SET is_current = FALSE
+               WHERE source_id = %s
+                 AND source_currency_code = %s
+                 AND category_id IS NOT DISTINCT FROM %s
+                 AND is_current = TRUE
+                 AND logical_observation_key != %s""",
+            (source_id, currency_code, category_id, logical_key),
+        )
+
+
+def _is_same_rate(conn, obs_id: int, prior_id: int) -> bool:
+    """Return True if buying_rate and selling_rate are identical between two observations."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT
+                 (a.buying_rate IS NOT DISTINCT FROM b.buying_rate)
+                 AND (a.selling_rate IS NOT DISTINCT FROM b.selling_rate)
+               FROM rate_observation a, rate_observation b
+               WHERE a.id = %s AND b.id = %s""",
+            (obs_id, prior_id),
+        )
+        row = cur.fetchone()
+        return bool(row and row[0])

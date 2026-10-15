@@ -12,7 +12,7 @@ services:
     name: exchange-rates-api
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
     startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT api.app:app
     envVars:
       - key: DATABASE_URL
@@ -32,7 +32,7 @@ services:
     name: collect-early
     env: python
     schedule: "0 5 * * *"
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
     startCommand: python3 -m scheduler.run_job
     envVars:
       - key: DATABASE_URL
@@ -45,7 +45,7 @@ services:
     name: collect-midday
     env: python
     schedule: "0 9 * * *"
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
     startCommand: python3 -m scheduler.run_job
     envVars:
       - key: DATABASE_URL
@@ -58,7 +58,7 @@ services:
     name: collect-afternoon
     env: python
     schedule: "0 12 * * *"
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
     startCommand: python3 -m scheduler.run_job
     envVars:
       - key: DATABASE_URL

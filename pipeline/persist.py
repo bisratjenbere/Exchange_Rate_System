@@ -13,6 +13,7 @@ from typing import Optional
 from domain.records import AdapterRecord
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from pipeline.fingerprint import FINGERPRINT_VERSION
+from pipeline.normalize import normalize_currency_code
 
 
 def insert_observation(
@@ -37,7 +38,7 @@ def insert_observation(
         cur.execute(
             """INSERT INTO rate_observation (
                    source_id, collection_run_id, category_id,
-                   source_currency_code, currency_name,
+                   currency_code, source_currency_code, currency_name,
                    buying_rate, selling_rate, source_rate_text, source_excerpt,
                    quote_currency_code, unit_multiplier,
                    effective_date, effective_date_basis,
@@ -48,7 +49,7 @@ def insert_observation(
                    supersedes_id
                ) VALUES (
                    %s, %s, %s,
-                   %s, %s,
+                   %s, %s, %s,
                    %s, %s, %s, %s,
                    %s, %s,
                    %s, %s,
@@ -60,6 +61,7 @@ def insert_observation(
                ) RETURNING id""",
             (
                 source_id, run_id, category_id,
+                normalize_currency_code(record.source_currency_code),
                 record.source_currency_code, record.currency_name,
                 record.buying_rate, record.selling_rate,
                 record.source_rate_text,
@@ -128,7 +130,7 @@ def commit_correction(
         cur.execute(
             """INSERT INTO rate_observation (
                    source_id, collection_run_id, category_id,
-                   source_currency_code, currency_name,
+                   currency_code, source_currency_code, currency_name,
                    buying_rate, selling_rate, source_rate_text, source_excerpt,
                    quote_currency_code, unit_multiplier,
                    effective_date, effective_date_basis,
@@ -139,7 +141,7 @@ def commit_correction(
                    supersedes_id
                ) VALUES (
                    %s, %s, %s,
-                   %s, %s,
+                   %s, %s, %s,
                    %s, %s, %s, %s,
                    %s, %s,
                    %s, %s,
@@ -151,6 +153,7 @@ def commit_correction(
                ) RETURNING id""",
             (
                 source_id, run_id, category_id,
+                normalize_currency_code(record.source_currency_code),
                 record.source_currency_code, record.currency_name,
                 record.buying_rate, record.selling_rate,
                 record.source_rate_text,
