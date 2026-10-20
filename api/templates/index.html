@@ -318,8 +318,8 @@
     <!-- industry average bar -->
     <div class="avg-bar">
       <span>Industry Average ({{ rows|length }} banks):</span>
-      <div class="avg-item"><span class="avg-dot buy"></span> You receive: <strong>{{ '%.2f'|format(industry_avg_buy|float) }} ETB</strong></div>
-      <div class="avg-item"><span class="avg-dot sell"></span> You pay: <strong>{{ '%.2f'|format(industry_avg_sell|float) }} ETB</strong></div>
+      <div class="avg-item"><span class="avg-dot buy"></span> You receive: <strong>{{ '%.4f'|format(industry_avg_buy|float) }} ETB</strong></div>
+      <div class="avg-item"><span class="avg-dot sell"></span> You pay: <strong>{{ '%.4f'|format(industry_avg_sell|float) }} ETB</strong></div>
       <span style="margin-left:auto;font-size:0.72rem;color:#bbb">per 1 {{ currency }}</span>
     </div>
 
@@ -359,12 +359,12 @@
         </div>
 
         <div class="rank-receive">
-          <div class="rank-receive-val">{{ '%.2f'|format(r.buying_rate|float) }}</div>
+          <div class="rank-receive-val">{{ '%.4f'|format(r.buying_rate|float) }}</div>
           <div class="rank-receive-label">ETB per {{ currency }}</div>
         </div>
 
         <div class="rank-pay">
-          <div class="rank-pay-val">{{ '%.2f'|format(r.selling_rate|float) if r.selling_rate else '—' }}</div>
+          <div class="rank-pay-val">{{ '%.4f'|format(r.selling_rate|float) if r.selling_rate else '—' }}</div>
           <div class="rank-pay-label">ETB per {{ currency }}</div>
         </div>
 
@@ -376,11 +376,11 @@
         <div class="rank-delta">
           {% if r.delta_buying is not none %}
             {% if r.delta_buying > 0.001 %}
-              <span class="delta-up">▲ {{ '%.2f'|format(r.delta_buying) }}</span>
+              <span class="delta-up">▲ {{ '%.4f'|format(r.delta_buying) }}</span>
             {% elif r.delta_buying < -0.001 %}
-              <span class="delta-down">▼ {{ '%.2f'|format(r.delta_buying|abs) }}</span>
+              <span class="delta-down">▼ {{ '%.4f'|format(r.delta_buying|abs) }}</span>
             {% else %}
-              <span class="delta-flat">— 0.00</span>
+              <span class="delta-flat">— 0.0000</span>
             {% endif %}
           {% else %}
             <span class="delta-flat">—</span>
@@ -470,8 +470,8 @@
           {% for cat in cats %}
             {% if cat in cat_data %}
               {% set d = cat_data[cat] %}
-              <td class="buy cat-divider">{{ '%.2f'|format(d.buying|float) if d.buying else '—' }}</td>
-              <td class="sell">{{ '%.2f'|format(d.selling|float) if d.selling else '—' }}</td>
+              <td class="buy cat-divider">{{ '%.4f'|format(d.buying|float) if d.buying else '—' }}</td>
+              <td class="sell">{{ '%.4f'|format(d.selling|float) if d.selling else '—' }}</td>
               {% if cat != 'weighted_average' %}
                 <td class="spread-cell">
                   {% if d.buying and d.selling and d.buying > 0 %}
@@ -535,7 +535,7 @@
           {% if cell and cell.buying %}
             {% set is_best = cell.buying == matrix.best_buying.get(cur) %}
             <td class="{{ 'best-cell' if is_best }}" title="{{ bank }}: buy {{ cell.buying }} / sell {{ cell.selling }}">
-              {{ '%.2f'|format(cell.buying|float) }}
+              {{ '%.4f'|format(cell.buying|float) }}
             </td>
           {% else %}
             <td class="na-cell">—</td>
@@ -588,8 +588,8 @@
                 {% elif r.category == 'weighted_average' %}<span class="cat-pill cat-reference">Reference</span>
                 {% else %}<span class="cat-pill cat-unknown">{{ r.category or '—' }}</span>{% endif %}
               </td>
-              <td class="buy">{{ '%.2f'|format(r.buying_rate|float) if r.buying_rate else '—' }}</td>
-              <td class="sell">{{ '%.2f'|format(r.selling_rate|float) if r.selling_rate else '—' }}</td>
+              <td class="buy">{{ '%.4f'|format(r.buying_rate|float) if r.buying_rate else '—' }}</td>
+              <td class="sell">{{ '%.4f'|format(r.selling_rate|float) if r.selling_rate else '—' }}</td>
               <td style="color:#aaa;font-size:0.78rem">
                 {% if r.buying_rate and r.selling_rate and r.buying_rate > 0 %}
                   {{ '%.1f'|format(((r.selling_rate|float - r.buying_rate|float) / r.buying_rate|float * 100)) }}%

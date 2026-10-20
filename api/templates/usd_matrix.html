@@ -151,10 +151,10 @@
           {% if cell %}
             {% set is_best = cell.buying is not none and cell.buying == best_buy %}
             <td class="{{ 'best-buy' if is_best else '' }}">
-              {% if cell.buying is not none %}{{ "%.2f"|format(cell.buying|float) }}{% else %}<span class="na">—</span>{% endif %}
+              {% if cell.buying is not none %}{{ "%.4f"|format(cell.buying|float) }}{% else %}<span class="na">—</span>{% endif %}
             </td>
             <td class="sell-cell {{ 'bank-end' if loop.last else '' }}">
-              {% if cell.selling is not none %}{{ "%.2f"|format(cell.selling|float) }}{% else %}<span class="na">—</span>{% endif %}
+              {% if cell.selling is not none %}{{ "%.4f"|format(cell.selling|float) }}{% else %}<span class="na">—</span>{% endif %}
             </td>
           {% else %}
             <td class="na">—</td>
