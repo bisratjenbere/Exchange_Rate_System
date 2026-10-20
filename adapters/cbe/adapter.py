@@ -21,6 +21,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -33,26 +34,90 @@ _CATEGORY_FIELDS = {
 }
 
 
+class CBEAdapter(JSONAdapter):
+    """
+    Commercial Bank of Ethiopia adapter using JSONAdapter base class.
+    
+    Parses JSON array of publication records with ExchangeRate arrays.
+    Emits 2 records per currency (cash + transactional).
+    """
+    
+    def get_source_url(self) -> str:
+        """Return CBE API URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_data(self, data, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from parsed JSON data.
+        
+        Args:
+            data: Parsed JSON (should be list of publication records)
+            **options: Additional options (unused)
+        
+        Returns:
+            ParseResult with records and any errors
+        
+        Raises:
+            ValueError: If data is not a JSON array
+        """
+        if not isinstance(data, list):
+            raise ValueError(
+                f"CBE: expected JSON array at top level, got {type(data).__name__}"
+            )
+        
+        records = []
+        for pub in data:
+            records.extend(_parse_publication(pub))
+        
+        result = ParseResult()
+        result.records = records
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """
+        Deterministic hash of the structural signature:
+        top-level publication keys + ExchangeRate item keys.
+        Triggers raw capture on schema change.
+        """
+        try:
+            data = json.loads(raw_content)
+            if isinstance(data, list) and data:
+                pub = data[0]
+                pub_keys = sorted(k for k in pub.keys() if k != "ExchangeRate")
+                er_keys = []
+                if isinstance(pub.get("ExchangeRate"), list) and pub["ExchangeRate"]:
+                    er_keys = sorted(pub["ExchangeRate"][0].keys())
+                payload = json.dumps({"pub": pub_keys, "er": er_keys}, separators=(",", ":"))
+                return hashlib.sha256(payload.encode()).hexdigest()
+        except Exception:
+            pass
+        return hashlib.sha256(b"cbe:empty_or_unparseable").hexdigest()
+
+
+# ── Backward Compatibility Wrappers ──────────────────────────────────────────
+
 def parse(raw_json: str) -> list:
     """
     Parse the raw API JSON array into AdapterRecords.
+    
+    BACKWARD COMPATIBILITY WRAPPER: New code should use CBEAdapter().parse()
+    
     Raises ValueError if top-level is not a JSON array.
     Returns empty list for empty array.
     """
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"CBE: JSON parse error: {exc}") from exc
-
-    if not isinstance(data, list):
-        raise ValueError(
-            f"CBE: expected JSON array at top level, got {type(data).__name__}"
-        )
-
-    records = []
-    for pub in data:
-        records.extend(_parse_publication(pub))
-    return records
+    adapter = CBEAdapter()
+    result = adapter.parse(raw_json)
+    
+    # Old API raised ValueError on errors, new API returns ParseResult with errors
+    # Convert back to old behavior for backward compatibility
+    if result.errors:
+        raise ValueError(result.errors[0])
+    
+    return result.records
 
 
 def _parse_publication(pub: dict) -> list:
@@ -161,20 +226,8 @@ def _parse_date(date_str: str) -> Optional[date]:
 
 def schema_fingerprint(raw_json: str) -> str:
     """
-    Deterministic hash of the structural signature:
-    top-level publication keys + ExchangeRate item keys.
-    Triggers raw capture on schema change.
+    Deterministic hash of the structural signature.
+    
+    BACKWARD COMPATIBILITY WRAPPER: New code should use CBEAdapter().schema_fingerprint()
     """
-    try:
-        data = json.loads(raw_json)
-        if isinstance(data, list) and data:
-            pub = data[0]
-            pub_keys = sorted(k for k in pub.keys() if k != "ExchangeRate")
-            er_keys = []
-            if isinstance(pub.get("ExchangeRate"), list) and pub["ExchangeRate"]:
-                er_keys = sorted(pub["ExchangeRate"][0].keys())
-            payload = json.dumps({"pub": pub_keys, "er": er_keys}, separators=(",", ":"))
-            return hashlib.sha256(payload.encode()).hexdigest()
-    except Exception:
-        pass
-    return hashlib.sha256(b"cbe:empty_or_unparseable").hexdigest()
+    return CBEAdapter().schema_fingerprint(raw_json)

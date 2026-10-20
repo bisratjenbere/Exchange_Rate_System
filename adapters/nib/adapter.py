@@ -10,7 +10,6 @@ Parse rules:
 - "No Trade" → None. Country column is empty in data rows.
 - Partial failure: returns (records, errors). Never raises.
 """
-import hashlib
 import re
 from datetime import date
 from decimal import Decimal
@@ -18,6 +17,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from adapters.base import HTMLTableAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -32,45 +32,95 @@ _MONTH_MAP = {
 }
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    records, errors = [], []
-
-    if len(tables) < 3:
-        # Try to work with what we have
+class NIBAdapter(HTMLTableAdapter):
+    """
+    Nib International Bank adapter.
+    
+    Type D adapter (multi-table HTML with shared date).
+    Parses HTML with 3 tables: date header, cash+transactional, weighted_average.
+    All tables share the same effective date from table 0.
+    """
+    
+    def get_source_url(self) -> str:
+        """Return NIB website URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def parse(self, raw_content: str, **options) -> ParseResult:
+        """
+        Parse HTML content, extract tables, and delegate to _process_tables().
+        
+        Overrides base class to provide NIB-specific error reporting
+        when no tables are found (reports all 3 expected tables as missing).
+        
+        Args:
+            raw_content: Raw HTML string
+            **options: Additional options passed to _process_tables()
+            
+        Returns:
+            ParseResult from _process_tables()
+        """
+        soup = BeautifulSoup(raw_content, "html.parser")
+        tables = soup.find_all("table")
+        
+        # Always call _process_tables even if no tables found
+        # This allows NIB-specific error reporting for all 3 expected tables
+        return self._process_tables(soup, tables, **options)
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from NIB HTML tables.
+        
+        Args:
+            soup: BeautifulSoup parsed HTML
+            tables: List of table elements
+            **options: Not used by NIB adapter
+            
+        Returns:
+            ParseResult with extracted records and any errors
+        """
+        result = ParseResult()
+        
+        # If no tables found, report all three table categories as missing
         if not tables:
-            return [], ["table_0_date:missing", "table_1_cash_txn:missing", "table_2_weighted:missing"]
-
-    # Extract date from table 0
-    effective_date = None
-    if tables:
+            result.add_error("table_0_date:missing")
+            result.add_error("table_1_cash_txn:missing")
+            result.add_error("table_2_weighted:missing")
+            return result
+        
+        # Extract date from table 0
+        effective_date = None
         try:
             effective_date = _extract_date(tables[0])
         except Exception as exc:
-            errors.append(f"date_extraction:{exc}")
-
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-
-    # Parse table 1 — cash + transactional
-    if len(tables) >= 2:
-        try:
-            records.extend(_parse_cash_txn(tables[1], effective_date, date_basis))
-        except Exception as exc:
-            errors.append(f"table_1_cash_txn:{exc}")
-    else:
-        errors.append("table_1_cash_txn:missing")
-
-    # Parse table 2 — weighted average
-    if len(tables) >= 3:
-        try:
-            records.extend(_parse_weighted(tables[2], effective_date, date_basis))
-        except Exception as exc:
-            errors.append(f"table_2_weighted:{exc}")
-    else:
-        errors.append("table_2_weighted:missing")
-
-    return records, errors
+            result.add_error(f"date_extraction:{exc}")
+        
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        # Parse table 1 — cash + transactional
+        if len(tables) >= 2:
+            try:
+                records = _parse_cash_txn(tables[1], effective_date, date_basis)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"table_1_cash_txn:{exc}")
+        else:
+            result.add_error("table_1_cash_txn:missing")
+        
+        # Parse table 2 — weighted average
+        if len(tables) >= 3:
+            try:
+                records = _parse_weighted(tables[2], effective_date, date_basis)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"table_2_weighted:{exc}")
+        else:
+            result.add_error("table_2_weighted:missing")
+        
+        return result
 
 
 def _extract_date(table) -> Optional[date]:
@@ -154,14 +204,37 @@ def _safe_rate(raw) -> Optional[Decimal]:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backward Compatibility Wrappers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse(raw_html: str) -> tuple:
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use NIBAdapter().parse().
+    
+    Args:
+        raw_html: Raw HTML string from NIB website
+        
+    Returns:
+        Tuple of (records, errors) for backward compatibility
+    """
+    adapter = NIBAdapter()
+    result = adapter.parse(raw_html)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = [
-            [c.get_text(strip=True) for c in t.find_all("tr")[0].find_all(["th", "td"])]
-            for t in tables if t.find_all("tr")
-        ]
-        return hashlib.sha256(str({"tables": len(tables), "headers": sig}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"nib:unparseable").hexdigest()
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use NIBAdapter().schema_fingerprint().
+    
+    Args:
+        raw_html: Raw HTML string from NIB website
+        
+    Returns:
+        SHA256 hash of table structure
+    """
+    return NIBAdapter().schema_fingerprint(raw_html)

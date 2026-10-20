@@ -22,8 +22,8 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from adapters.base import BankAdapter, ParseResult
 from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
 
 ADAPTER_KEY = "tsedey_html"
 SOURCE_URL = "https://www.tsedeybank.com.et/"
@@ -31,51 +31,89 @@ SOURCE_URL = "https://www.tsedeybank.com.et/"
 _RECORD_RE = re.compile(r'\{"id":\d+,"name":"[^"]+","code":"[A-Z]{3}"[^}]+\}')
 
 
-def parse(raw_html: str) -> tuple:
-    records, errors = [], []
-    seen = set()
+# ============================================================================
+# ADAPTER CLASS
+# ============================================================================
 
-    for m in _RECORD_RE.finditer(raw_html):
+class TsedeyAdapter(BankAdapter):
+    """Tsedey Bank adapter - JSON records embedded in HTML."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def parse(self, raw_content: str, **options) -> ParseResult:
+        """
+        Extract JSON records from HTML using regex.
+        Custom implementation that doesn't use HTMLTableAdapter or JSONAdapter.
+        """
+        result = ParseResult()
+        seen = set()
+        
+        for m in _RECORD_RE.finditer(raw_content):
+            try:
+                row = json.loads(m.group())
+                code = str(row.get("code", "")).strip()
+                category_raw = str(row.get("category", "")).lower()
+                category = "transactional" if category_raw == "non-cash" else "cash" if category_raw == "cash" else None
+                if not code or not category:
+                    continue
+                
+                dedup_key = f"{code}:{category}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                
+                effective_date = self._parse_iso_date(row.get("updated_at", ""))
+                date_basis = "source_inferred" if effective_date else "collection_date_fallback"
+                
+                buying = self._safe_rate(row.get("buying_rate"))
+                selling = self._safe_rate(row.get("selling_rate"))
+                if buying is not None or selling is not None:
+                    result.records.append(_make_record(
+                        code, category, buying, selling,
+                        row.get("buying_rate"), row.get("selling_rate"),
+                        effective_date, date_basis, row
+                    ))
+                
+                # weighted average
+                w_buy = self._safe_rate(row.get("weighted_average_buying"))
+                w_sell = self._safe_rate(row.get("weighted_average_selling"))
+                w_key = f"{code}:weighted_average"
+                if (w_buy is not None or w_sell is not None) and w_key not in seen:
+                    seen.add(w_key)
+                    result.records.append(_make_record(
+                        code, "weighted_average", w_buy, w_sell,
+                        row.get("weighted_average_buying"),
+                        row.get("weighted_average_selling"),
+                        effective_date, date_basis, row
+                    ))
+            except Exception as exc:
+                result.add_error(f"record:{m.group()[:40]}:{exc}")
+        
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """Hash first record keys and count."""
         try:
-            row = json.loads(m.group())
-            code = str(row.get("code", "")).strip()
-            category_raw = str(row.get("category", "")).lower()
-            category = "transactional" if category_raw == "non-cash" else "cash" if category_raw == "cash" else None
-            if not code or not category:
-                continue
-
-            dedup_key = f"{code}:{category}"
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-
-            effective_date = _parse_date(row.get("updated_at"))
-            date_basis = "source_inferred" if effective_date else "collection_date_fallback"
-
-            buying = _safe_rate(row.get("buying_rate"))
-            selling = _safe_rate(row.get("selling_rate"))
-            if buying is not None or selling is not None:
-                records.append(_make(code, category, buying, selling,
-                                     row.get("buying_rate"), row.get("selling_rate"),
-                                     effective_date, date_basis, row))
-
-            # weighted average
-            w_buy = _safe_rate(row.get("weighted_average_buying"))
-            w_sell = _safe_rate(row.get("weighted_average_selling"))
-            w_key = f"{code}:weighted_average"
-            if (w_buy is not None or w_sell is not None) and w_key not in seen:
-                seen.add(w_key)
-                records.append(_make(code, "weighted_average", w_buy, w_sell,
-                                     row.get("weighted_average_buying"),
-                                     row.get("weighted_average_selling"),
-                                     effective_date, date_basis, row))
-        except Exception as exc:
-            errors.append(f"record:{m.group()[:40]}:{exc}")
-
-    return records, errors
+            matches = _RECORD_RE.findall(raw_content)
+            if matches:
+                first = json.loads(matches[0])
+                keys = sorted(first.keys())
+                return hashlib.sha256(str({"keys": keys, "count": len(matches)}).encode()).hexdigest()
+        except Exception:
+            pass
+        return hashlib.sha256(b"tsedey:unparseable").hexdigest()
 
 
-def _make(code, category, buying, selling, buy_text, sell_text, eff_date, date_basis, row):
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def _make_record(code, category, buying, selling, buy_text, sell_text, eff_date, date_basis, row):
+    """Helper to create AdapterRecord."""
     return AdapterRecord(
         source_currency_code=code,
         category=category,
@@ -93,31 +131,22 @@ def _make(code, category, buying, selling, buy_text, sell_text, eff_date, date_b
     )
 
 
-def _parse_date(raw) -> Optional[date]:
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(str(raw).strip()[:10])
-    except ValueError:
-        return None
+# ============================================================================
+# MODULE-LEVEL FUNCTIONS (backward compatibility)
+# ============================================================================
+
+_adapter = TsedeyAdapter()
 
 
-def _safe_rate(raw) -> Optional[Decimal]:
-    if not raw or str(raw).upper() in ("NO TRADE", "N/A", ""):
-        return None
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
+def parse(raw_html: str) -> tuple:
+    """
+    Parse HTML with embedded JSON records.
+    Backward-compatible wrapper that returns (records, errors) tuple.
+    """
+    result = _adapter.parse(raw_html)
+    return result.records, result.errors
 
 
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        matches = _RECORD_RE.findall(raw_html)
-        if matches:
-            first = json.loads(matches[0])
-            keys = sorted(first.keys())
-            return hashlib.sha256(str({"keys": keys, "count": len(matches)}).encode()).hexdigest()
-    except Exception:
-        pass
-    return hashlib.sha256(b"tsedey:unparseable").hexdigest()
+    """Hash first record keys and count."""
+    return _adapter.schema_fingerprint(raw_html)

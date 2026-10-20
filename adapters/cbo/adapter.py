@@ -21,6 +21,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from adapters.base import HTMLTableAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -38,48 +39,68 @@ _MONTH_MAP = {
 }
 
 
-def parse(raw_html: str) -> tuple:
+class CBOAdapter(HTMLTableAdapter):
     """
-    Returns (records: list[AdapterRecord], errors: list[str]).
-    Partial failure: errors non-empty when a table could not be parsed.
-    Never raises.
+    Cooperative Bank of Oromia adapter using HTMLTableAdapter base class.
+    
+    Type E adapter with 2 tables: cash+transactional combined, and weighted_average.
+    Both tables share the same effective date extracted from table 0 header.
     """
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-
-    records = []
-    errors = []
-    effective_date = None
-
-    if len(tables) < 1:
-        errors.append("table_0_cash_txn:missing")
-        errors.append("table_1_weighted_avg:missing")
-        return records, errors
-
-    # Extract date from table 0 header
-    try:
-        effective_date = _extract_date_from_table(tables[0])
-    except Exception as exc:
-        errors.append(f"date_extraction:{exc}")
-
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-
-    # Parse table 0 — cash + transactional
-    try:
-        records.extend(_parse_cash_txn_table(tables[0], effective_date, date_basis))
-    except Exception as exc:
-        errors.append(f"table_0_cash_txn:{exc}")
-
-    # Parse table 1 — weighted average
-    if len(tables) < 2:
-        errors.append("table_1_weighted_avg:missing")
-    else:
+    
+    def get_source_url(self) -> str:
+        """Return CBO website URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from CBO HTML tables.
+        
+        Args:
+            soup: BeautifulSoup parsed HTML
+            tables: List of table elements (expecting 2 tables)
+            **options: Not used by CBO
+            
+        Returns:
+            ParseResult with extracted records and any errors
+        """
+        result = ParseResult()
+        
+        if len(tables) < 1:
+            result.add_error("table_0_cash_txn:missing")
+            result.add_error("table_1_weighted_avg:missing")
+            return result
+        
+        # Extract date from table 0 header
+        effective_date = None
         try:
-            records.extend(_parse_weighted_table(tables[1], effective_date, date_basis))
+            effective_date = _extract_date_from_table(tables[0])
         except Exception as exc:
-            errors.append(f"table_1_weighted_avg:{exc}")
-
-    return records, errors
+            result.add_error(f"date_extraction:{exc}")
+        
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        # Parse table 0 — cash + transactional
+        try:
+            records = _parse_cash_txn_table(tables[0], effective_date, date_basis)
+            result.records.extend(records)
+        except Exception as exc:
+            result.add_error(f"table_0_cash_txn:{exc}")
+        
+        # Parse table 1 — weighted average
+        if len(tables) < 2:
+            result.add_error("table_1_weighted_avg:missing")
+        else:
+            try:
+                records = _parse_weighted_table(tables[1], effective_date, date_basis)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"table_1_weighted_avg:{exc}")
+        
+        return result
 
 
 def _extract_date_from_table(table) -> Optional[date]:
@@ -186,6 +207,7 @@ def _parse_currency_cell(text: str) -> tuple:
 
 
 def _parse_date_text(text: str) -> Optional[date]:
+    """Parse date from text using month name pattern."""
     m = _DATE_RE.search(text)
     if not m:
         return None
@@ -199,23 +221,44 @@ def _parse_date_text(text: str) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely convert raw value to normalized Decimal rate."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backward Compatibility Wrappers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse(raw_html: str) -> tuple:
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use CBOAdapter().parse().
+    
+    Args:
+        raw_html: Raw HTML string from CBO website
+        
+    Returns:
+        Tuple of (records, errors) for backward compatibility
+    """
+    adapter = CBOAdapter()
+    result = adapter.parse(raw_html)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_html: str) -> str:
-    """Hash of table count + per-table header structure."""
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = []
-        for t in tables:
-            rows = t.find_all("tr")
-            if rows:
-                sig.append([c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])])
-        payload = str({"tables": len(tables), "headers": sig})
-        return hashlib.sha256(payload.encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"cbo:unparseable").hexdigest()
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use CBOAdapter().schema_fingerprint().
+    
+    Args:
+        raw_html: Raw HTML string
+        
+    Returns:
+        SHA256 hash of table structure
+    """
+    return CBOAdapter().schema_fingerprint(raw_html)

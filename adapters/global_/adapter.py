@@ -9,35 +9,47 @@ Parse rules:
 - Review signal: buying > selling (observed for USD in table 1).
 - Partial failure: returns (records, errors). Never raises.
 """
-import hashlib
 from decimal import Decimal
 from typing import Optional
-
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from adapters.base import HTMLTableAdapter, ParseResult
 
 ADAPTER_KEY = "global_html"
 SOURCE_URL = "https://www.globalbankethiopia.com/remittance-forex/"
 
 
-def parse(raw_html: str, category: str = "transactional") -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    if not tables:
-        return [], ["table_0:missing"]
-
-    records, errors = [], []
-    for i, table in enumerate(tables[:2]):
-        try:
-            records.extend(_parse_table(table, table_index=i, category=category))
-        except Exception as exc:
-            errors.append(f"table_{i}:{exc}")
-    return records, errors
+class GlobalAdapter(HTMLTableAdapter):
+    """Global Bank Ethiopia adapter - parses 2 tables with category parameter."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
+        """Process two tables from Global Bank."""
+        result = ParseResult()
+        category = kwargs.get("category", "transactional")
+        
+        # Process first 2 tables only
+        tables_to_process = list(tables)[:2] if len(tables) >= 2 else list(tables)
+        
+        for i, table in enumerate(tables_to_process):
+            try:
+                records = _parse_table(table, table_index=i, category=category)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"table_{i}:{exc}")
+        
+        return result
 
 
 def _parse_table(table, table_index: int, category: str = "transactional") -> list:
+    """Parse a single table from Global Bank."""
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -72,20 +84,24 @@ def _parse_table(table, table_index: int, category: str = "transactional") -> li
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Convert raw rate string to Decimal, returning None on failure."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+# ============================================================================
+
+_adapter_instance = GlobalAdapter()
+
+def parse(raw_html: str, category: str = "transactional") -> tuple:
+    """Parse Global Bank HTML into records. Module-level wrapper."""
+    result = _adapter_instance.parse(raw_html, category=category)
+    return result.records, result.errors
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = [
-            [c.get_text(strip=True) for c in t.find_all("tr")[0].find_all(["th", "td"])]
-            for t in tables if t.find_all("tr")
-        ]
-        return hashlib.sha256(str({"tables": len(tables), "headers": sig}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"global:unparseable").hexdigest()
+    """Generate schema fingerprint. Module-level wrapper."""
+    return _adapter_instance.schema_fingerprint(raw_html)

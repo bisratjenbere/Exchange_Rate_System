@@ -6,34 +6,43 @@ Parse rules:
 - No date → collection_date_fallback → identity_status=ambiguous.
 - Partial failure: returns (records, errors). Never raises.
 """
-import hashlib
 from decimal import Decimal
 from typing import Optional
-
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from adapters.base import HTMLTableAdapter, ParseResult
 
 ADAPTER_KEY = "siinqee_html"
 SOURCE_URL = "https://siinqeebank.com/"
 
 
-def parse(raw_html: str, category: str = "transactional") -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    if not tables:
-        return [], ["table_0:missing"]
-
-    records, errors = [], []
-    try:
-        records = _parse_table(tables[0], category)
-    except Exception as exc:
-        errors.append(f"table_0:{exc}")
-    return records, errors
+class SiinqeeAdapter(HTMLTableAdapter):
+    """Siinqee Bank adapter - single table with category parameter."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
+        """Process single table from Siinqee Bank."""
+        result = ParseResult()
+        category = kwargs.get("category", "transactional")
+        
+        try:
+            records = _parse_table(tables[0], category)
+            result.records.extend(records)
+        except Exception as exc:
+            result.add_error(f"table_0:{exc}")
+        
+        return result
 
 
 def _parse_table(table, category: str = "transactional") -> list:
+    """Parse single table from Siinqee Bank."""
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -65,20 +74,24 @@ def _parse_table(table, category: str = "transactional") -> list:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Convert raw rate string to Decimal, returning None on failure."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+# ============================================================================
+
+_adapter_instance = SiinqeeAdapter()
+
+def parse(raw_html: str, category: str = "transactional") -> tuple:
+    """Parse Siinqee Bank HTML into records. Module-level wrapper."""
+    result = _adapter_instance.parse(raw_html, category=category)
+    return result.records, result.errors
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = [
-            [c.get_text(strip=True) for c in t.find_all("tr")[0].find_all(["th", "td"])]
-            for t in tables if t.find_all("tr")
-        ]
-        return hashlib.sha256(str({"tables": len(tables), "headers": sig}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"siinqee:unparseable").hexdigest()
+    """Generate schema fingerprint. Module-level wrapper."""
+    return _adapter_instance.schema_fingerprint(raw_html)

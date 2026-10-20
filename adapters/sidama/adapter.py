@@ -13,16 +13,15 @@ Parse rules:
 - Schema change detection: if expected labels absent → raises ValueError.
 - Partial failure: returns (records, errors). Never raises on parse.
 """
-import hashlib
 import re
 from datetime import date
 from decimal import Decimal
 from typing import Optional
-
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from adapters.base import HTMLTextAdapter, ParseResult
 
 ADAPTER_KEY = "sidama_html"
 SOURCE_URL = "https://sidamabanksc.com/exchange-rate/"
@@ -49,26 +48,47 @@ _CURRENCY_BLOCK_RE = re.compile(
 )
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    # Join all text with spaces, collapsing newlines so blocks don't split mid-pattern
-    text = " ".join(soup.get_text(" ", strip=True).split())
-
-    effective_date = _extract_date(text)
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-
-    records, errors = [], []
-    for m in _CURRENCY_BLOCK_RE.finditer(text):
+class SidamaAdapter(HTMLTextAdapter):
+    """Sidama Bank adapter - text extraction with regex patterns."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def _extract_from_text(self, text: str, soup: BeautifulSoup, **options) -> ParseResult:
+        """Extract exchange rates from normalized text using regex patterns."""
+        result = ParseResult()
+        
+        effective_date = _extract_date(text)
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        for m in _CURRENCY_BLOCK_RE.finditer(text):
+            try:
+                recs = _parse_match(m, effective_date, date_basis)
+                result.records.extend(recs)
+            except Exception as exc:
+                result.add_error(f"currency_block:{m.group(1)}:{exc}")
+        
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """Generate fingerprint based on presence of text markers."""
         try:
-            recs = _parse_match(m, effective_date, date_basis)
-            records.extend(recs)
-        except Exception as exc:
-            errors.append(f"currency_block:{m.group(1)}:{exc}")
-
-    return records, errors
+            soup = BeautifulSoup(raw_content, "html.parser")
+            text = " ".join(soup.get_text(" ", strip=True).split())
+            markers = ["Cash Buying", "Cash Selling", "Transactional Buying", "Prev Weighted"]
+            present = [m for m in markers if m in text]
+            import hashlib
+            return hashlib.sha256(str(present).encode()).hexdigest()
+        except Exception:
+            import hashlib
+            return hashlib.sha256(b"sidama:unparseable").hexdigest()
 
 
 def _parse_match(m, effective_date, date_basis) -> list:
+    """Parse a single currency block match into AdapterRecords."""
     code = m.group(1).upper()
     values = {
         "cash": (m.group(2), m.group(3)),
@@ -99,6 +119,7 @@ def _parse_match(m, effective_date, date_basis) -> list:
 
 
 def _extract_date(text: str) -> Optional[date]:
+    """Extract date from text in format like 'October 10, 2026'."""
     m = _DATE_RE.search(text)
     if not m:
         return None
@@ -112,6 +133,7 @@ def _extract_date(text: str) -> Optional[date]:
 
 
 def _safe_rate(raw: str) -> Optional[Decimal]:
+    """Convert raw rate string to Decimal, returning None on failure."""
     if not raw or raw.strip().lower() == "no trade":
         return None
     try:
@@ -120,12 +142,17 @@ def _safe_rate(raw: str) -> Optional[Decimal]:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+# ============================================================================
+
+_adapter_instance = SidamaAdapter()
+
+def parse(raw_html: str) -> tuple:
+    """Parse Sidama Bank HTML into records. Module-level wrapper."""
+    result = _adapter_instance.parse(raw_html)
+    return result.records, result.errors
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        text = " ".join(soup.get_text(" ", strip=True).split())
-        markers = ["Cash Buying", "Cash Selling", "Transactional Buying", "Prev Weighted"]
-        present = [m for m in markers if m in text]
-        return hashlib.sha256(str(present).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"sidama:unparseable").hexdigest()
+    """Generate schema fingerprint. Module-level wrapper."""
+    return _adapter_instance.schema_fingerprint(raw_html)

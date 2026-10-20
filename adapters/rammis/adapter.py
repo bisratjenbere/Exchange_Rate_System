@@ -16,6 +16,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -23,33 +24,111 @@ ADAPTER_KEY = "rammis_api"
 SOURCE_URL = "https://rammisbank.et/api/v1/exchange-rates/latest?base_currency=ETB"
 
 
+class RammisAdapter(JSONAdapter):
+    """
+    Rammis Bank adapter using JSONAdapter base class.
+    
+    Parses JSON object with envelope containing rates array.
+    Emits 1 record per currency row with category UNKNOWN.
+    """
+    
+    def get_source_url(self) -> str:
+        """Return Rammis API URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_data(self, data, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from parsed JSON data.
+        
+        Args:
+            data: Parsed JSON (should be dict with rates array)
+            **options: Additional options (category defaults to "UNKNOWN")
+        
+        Returns:
+            ParseResult with records and any errors
+        
+        Raises:
+            ValueError: If data is not a JSON object or rates key is missing
+        """
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Rammis: expected JSON object at top level, got {type(data).__name__}"
+            )
+        
+        rates = data.get("rates")
+        if rates is None:
+            raise ValueError("Rammis: missing 'rates' key — schema changed")
+        if not isinstance(rates, list):
+            raise ValueError(f"Rammis: 'rates' must be an array, got {type(rates).__name__}")
+        
+        category = options.get("category", "UNKNOWN")
+        
+        records = []
+        for row in rates:
+            record = _parse_row(row, category)
+            if record is not None:
+                records.append(record)
+        
+        result = ParseResult()
+        result.records = records
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """
+        Deterministic hash of the structural signature:
+        envelope keys (excluding rates) + rate item keys.
+        Triggers raw capture on schema change.
+        """
+        try:
+            data = json.loads(raw_content)
+            if isinstance(data, dict):
+                env_keys = sorted(k for k in data.keys() if k != "rates")
+                rate_keys = []
+                rates = data.get("rates", [])
+                if isinstance(rates, list) and rates and isinstance(rates[0], dict):
+                    rate_keys = sorted(rates[0].keys())
+                payload = json.dumps({"env": env_keys, "rate": rate_keys}, separators=(",", ":"))
+                return hashlib.sha256(payload.encode()).hexdigest()
+        except Exception:
+            pass
+        return hashlib.sha256(b"rammis:empty_or_unparseable").hexdigest()
+
+
+# ── Backward Compatibility Wrappers ──────────────────────────────────────────
+
 def parse(raw_json: str, category: str = "UNKNOWN") -> list:
     """
     Parse the raw API JSON into AdapterRecords.
-    category: injected by scheduler from rate_source.default_category (ADR-008).
-    Raises ValueError if top-level is not a JSON object or rates key is missing.
-    Returns empty list if rates array is empty.
+    
+    BACKWARD COMPATIBILITY WRAPPER: New code should use RammisAdapter().parse()
+    
+    Args:
+        raw_json: Raw JSON string from API
+        category: Category value (defaults to "UNKNOWN")
+    
+    Raises:
+        ValueError: If parsing fails or schema is invalid
+    
+    Returns:
+        List of AdapterRecord objects
     """
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Rammis: JSON parse error: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"Rammis: expected JSON object at top level, got {type(data).__name__}"
-        )
-
-    rates = data.get("rates")
-    if rates is None:
-        raise ValueError("Rammis: missing 'rates' key — schema changed")
-    if not isinstance(rates, list):
-        raise ValueError(f"Rammis: 'rates' must be an array, got {type(rates).__name__}")
-
-    return [r for row in rates for r in [_parse_row(row, category)] if r is not None]
+    adapter = RammisAdapter()
+    result = adapter.parse(raw_json, category=category)
+    
+    # Old API raised ValueError on errors, new API returns ParseResult with errors
+    # Convert back to old behavior for backward compatibility
+    if result.errors:
+        raise ValueError(result.errors[0])
+    
+    return result.records
 
 
 def _parse_row(row: dict, category: str = "UNKNOWN") -> Optional[AdapterRecord]:
+    """Parse one rate row into AdapterRecord."""
     if not isinstance(row, dict):
         return None
 
@@ -90,6 +169,7 @@ def _parse_row(row: dict, category: str = "UNKNOWN") -> Optional[AdapterRecord]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely convert raw value to normalized Decimal rate."""
     try:
         return normalize_rate(raw)
     except ValueError:
@@ -97,6 +177,7 @@ def _safe_rate(raw) -> Optional[Decimal]:
 
 
 def _parse_date(date_str: str) -> Optional[date]:
+    """Parse YYYY-MM-DD date string. Returns None if unparseable."""
     try:
         return date.fromisoformat(str(date_str).strip())
     except (ValueError, AttributeError):
@@ -104,17 +185,9 @@ def _parse_date(date_str: str) -> Optional[date]:
 
 
 def schema_fingerprint(raw_json: str) -> str:
-    """Hash of envelope keys + rate item keys."""
-    try:
-        data = json.loads(raw_json)
-        if isinstance(data, dict):
-            env_keys = sorted(k for k in data.keys() if k != "rates")
-            rate_keys = []
-            rates = data.get("rates", [])
-            if isinstance(rates, list) and rates and isinstance(rates[0], dict):
-                rate_keys = sorted(rates[0].keys())
-            payload = json.dumps({"env": env_keys, "rate": rate_keys}, separators=(",", ":"))
-            return hashlib.sha256(payload.encode()).hexdigest()
-    except Exception:
-        pass
-    return hashlib.sha256(b"rammis:empty_or_unparseable").hexdigest()
+    """
+    Deterministic hash of the structural signature.
+    
+    BACKWARD COMPATIBILITY WRAPPER: New code should use RammisAdapter().schema_fingerprint()
+    """
+    return RammisAdapter().schema_fingerprint(raw_json)

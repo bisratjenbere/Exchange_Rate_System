@@ -30,8 +30,8 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from adapters.base import HTMLTextAdapter, ParseResult
 from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
 
 ADAPTER_KEY = "anbesa_browser"
 SOURCE_URL = "https://anbesabank.com/"
@@ -40,6 +40,10 @@ FETCH_METHOD = "browser"
 _HOME_URL = "https://anbesabank.com/"
 _POPUP_TIMEOUT = 15000   # ms to wait for popup content
 
+
+# ============================================================================
+# CUSTOM FETCH FUNCTION (browser-based)
+# ============================================================================
 
 def fetch_raw(source_url: str, user_agent: str, ssl_verify: bool) -> tuple:
     """Launch Playwright, click both exchange rate triggers, return combined HTML."""
@@ -104,33 +108,64 @@ def fetch_raw(source_url: str, user_agent: str, ssl_verify: bool) -> tuple:
     return combined, 200
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    effective_date = _parse_date(soup)
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
+# ============================================================================
+# ADAPTER CLASS
+# ============================================================================
 
-    records, errors = [], []
-
-    # Find all tables in the combined HTML
-    tables = soup.find_all("table")
-    for table in tables:
-        try:
-            records.extend(_parse_table(table, effective_date, date_basis))
-        except Exception as exc:
-            errors.append(f"table:{exc}")
-
-    # If no tables, try div-based layout (same pattern as Shabelle)
-    if not records:
-        for block in soup.find_all("div", class_=re.compile(r"rate|exchange|currency", re.I)):
+class AnbesaAdapter(HTMLTextAdapter):
+    """Anbesa Bank adapter using Playwright browser automation."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def _extract_from_text(self, text: str, soup: BeautifulSoup, **kwargs) -> ParseResult:
+        """Extract rates from combined popup HTML."""
+        result = ParseResult()
+        
+        effective_date = _parse_date(soup)
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        # Find all tables in the combined HTML
+        tables = soup.find_all("table")
+        for table in tables:
             try:
-                records.extend(_parse_div_block(block, effective_date, date_basis))
+                records = _parse_table(table, effective_date, date_basis)
+                result.records.extend(records)
             except Exception as exc:
-                errors.append(f"div:{exc}")
+                result.add_error(f"table:{exc}")
+        
+        # If no tables, try div-based layout (same pattern as Shabelle)
+        if not result.records:
+            for block in soup.find_all("div", class_=re.compile(r"rate|exchange|currency", re.I)):
+                try:
+                    records = _parse_div_block(block, effective_date, date_basis)
+                    result.records.extend(records)
+                except Exception as exc:
+                    result.add_error(f"div:{exc}")
+        
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """Hash table count and headers."""
+        soup = BeautifulSoup(raw_content, "html.parser")
+        tables = soup.find_all("table")
+        headers = []
+        for t in tables:
+            rows = t.find_all("tr")
+            if rows:
+                headers.append([th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])])
+        return hashlib.sha256(str({"tables": len(tables), "headers": headers}).encode()).hexdigest()
 
-    return records, errors
 
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
 
 def _parse_table(table, effective_date, date_basis) -> list:
+    """Parse a table element to extract rate records."""
     rows = table.find_all("tr")
     if len(rows) < 2:
         return []
@@ -184,6 +219,7 @@ def _parse_div_block(block, effective_date, date_basis) -> list:
 
 
 def _add(records, code, category, buy_text, sell_text, eff_date, date_basis):
+    """Helper to add a record to the list."""
     buying = _safe_rate(buy_text)
     selling = _safe_rate(sell_text)
     if buying is None and selling is None:
@@ -218,6 +254,7 @@ def _extract_code(raw: str) -> Optional[str]:
 
 
 def _parse_date(soup) -> Optional[date]:
+    """Extract date from page text."""
     text = soup.get_text(" ")
     for pattern in [
         r'(\d{1,2})[/-](\w+)[/-]\s*(\d{4})',
@@ -237,22 +274,34 @@ def _parse_date(soup) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely parse rate value."""
     if not raw or str(raw).strip().lower() in ("", "-", "n/a", "no trade"):
         return None
     # Strip currency symbols / "Birr"
     cleaned = re.sub(r'[^\d.]', '', str(raw))
     try:
+        from pipeline.normalize import normalize_rate
         return normalize_rate(cleaned)
     except ValueError:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL FUNCTIONS (backward compatibility)
+# ============================================================================
+
+_adapter = AnbesaAdapter()
+
+
+def parse(raw_html: str) -> tuple:
+    """
+    Parse combined popup HTML.
+    Backward-compatible wrapper that returns (records, errors) tuple.
+    """
+    result = _adapter.parse(raw_html)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_html: str) -> str:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    headers = []
-    for t in tables:
-        rows = t.find_all("tr")
-        if rows:
-            headers.append([th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])])
-    return hashlib.sha256(str({"tables": len(tables), "headers": headers}).encode()).hexdigest()
+    """Hash table count and headers."""
+    return _adapter.schema_fingerprint(raw_html)

@@ -33,6 +33,7 @@ from typing import Optional
 
 import requests
 
+from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -42,37 +43,97 @@ _HOME_URL = "https://awashbank.com/"
 _AJAX_URL = "https://awashbank.com/wp-admin/admin-ajax.php"
 
 
+class AwashAdapter(JSONAdapter):
+    """
+    Awash Bank adapter using JSONAdapter base class.
+    
+    Parses JSON response from WordPress AJAX endpoint.
+    Emits 0-2 records per currency (transactional + weighted_average).
+    """
+    
+    def get_source_url(self) -> str:
+        """Return Awash AJAX endpoint URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_data(self, data, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from parsed JSON data.
+        
+        Args:
+            data: Parsed JSON (should be WordPress AJAX response)
+            **options: Additional options (unused)
+        
+        Returns:
+            ParseResult with records and any errors
+        """
+        result = ParseResult()
+        
+        if not data.get("success"):
+            result.add_error(f"success_false:{data.get('data')}")
+            return result
+        
+        inner = data.get("data", {})
+        rates = inner.get("rates", {})
+        if not isinstance(rates, dict):
+            result.add_error("rates_not_dict")
+            return result
+        
+        effective_date = _parse_date(inner.get("date"))
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        for currency, rate_data in rates.items():
+            if not isinstance(rate_data, dict):
+                continue
+            try:
+                records = _parse_currency(currency, rate_data, effective_date, date_basis)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"currency:{currency}:{exc}")
+        
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """
+        Deterministic hash of the structural signature.
+        
+        Hashes sorted currency codes and rate field keys.
+        Triggers raw capture on schema change.
+        """
+        try:
+            data = json.loads(raw_content)
+            currencies = sorted(data["data"]["rates"].keys())
+            rate_keys = sorted(next(iter(data["data"]["rates"].values())).keys())
+            payload = json.dumps({"currencies": currencies, "rate_keys": rate_keys}, separators=(",", ":"))
+            return hashlib.sha256(payload.encode()).hexdigest()
+        except Exception:
+            pass
+        return hashlib.sha256(b"awash:unparseable").hexdigest()
+
+
 def fetch_raw(source_url: str, user_agent: str, ssl_verify: bool) -> tuple:
-    """Two-step fetch: extract nonce from LiteSpeed JS, then POST AJAX."""
+    """Two-step fetch: extract nonce from homepage HTML, then POST AJAX."""
     headers = {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
 
-    # Step 1: GET homepage to find LiteSpeed JS bundle URL
+    # Step 1: GET homepage and extract nonce inline
     resp = requests.get(_HOME_URL, headers=headers, timeout=15, verify=ssl_verify)
     if resp.status_code != 200:
         raise RuntimeError(f"Homepage HTTP {resp.status_code}")
 
-    js_url = _extract_js_url(resp.text)
-    if not js_url:
-        raise ValueError("LiteSpeed JS bundle URL not found in homepage")
-
-    time.sleep(1)
-
-    # Step 2: GET JS bundle and extract nonce
-    js_resp = requests.get(js_url, headers=headers, timeout=15, verify=ssl_verify)
-    if js_resp.status_code != 200:
-        raise RuntimeError(f"JS bundle HTTP {js_resp.status_code}")
-
-    nonce = _extract_nonce(js_resp.text)
+    nonce = _extract_nonce(resp.text)
     if not nonce:
-        raise ValueError("Nonce not found in JS bundle")
+        raise ValueError("Nonce not found in homepage")
 
     time.sleep(1)
 
-    # Step 3: POST AJAX
+    # Step 2: POST AJAX
     ajax_headers = {
         "User-Agent": user_agent,
         "Content-Type": "application/x-www-form-urlencoded",
@@ -92,6 +153,7 @@ def fetch_raw(source_url: str, user_agent: str, ssl_verify: bool) -> tuple:
 
 
 def _extract_js_url(html: str) -> Optional[str]:
+    """Extract LiteSpeed JS bundle URL from homepage HTML."""
     # LiteSpeed bundles JS: <script ... src="https://awashbank.com/wp-content/litespeed/js/....js"
     m = re.search(
         r'src=["\']+(https://awashbank\.com/wp-content/litespeed/js/[^"\']+\.js)',
@@ -101,40 +163,14 @@ def _extract_js_url(html: str) -> Optional[str]:
 
 
 def _extract_nonce(js_text: str) -> Optional[str]:
+    """Extract nonce from exchangeRatesVars object in JS."""
     # exchangeRatesVars={"nonce":"55c098d874",...}
     m = re.search(r'exchangeRatesVars\s*=\s*\{[^}]*"nonce"\s*:\s*"([a-f0-9]+)"', js_text)
     return m.group(1) if m else None
 
 
-def parse(raw_json: str) -> tuple:
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        return [], [f"json_parse:{exc}"]
-
-    if not data.get("success"):
-        return [], [f"success_false:{data.get('data')}"]
-
-    inner = data.get("data", {})
-    rates = inner.get("rates", {})
-    if not isinstance(rates, dict):
-        return [], ["rates_not_dict"]
-
-    effective_date = _parse_date(inner.get("date"))
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-
-    records, errors = [], []
-    for currency, rate_data in rates.items():
-        if not isinstance(rate_data, dict):
-            continue
-        try:
-            records.extend(_parse_currency(currency, rate_data, effective_date, date_basis))
-        except Exception as exc:
-            errors.append(f"currency:{currency}:{exc}")
-    return records, errors
-
-
 def _parse_currency(currency: str, rate_data: dict, eff_date, date_basis: str) -> list:
+    """Parse one currency's rate data into 0-2 AdapterRecords."""
     records = []
 
     # transactional: buying / selling
@@ -157,6 +193,7 @@ def _parse_currency(currency: str, rate_data: dict, eff_date, date_basis: str) -
 
 
 def _make(currency, category, buying, selling, buy_text, sell_text, eff_date, date_basis):
+    """Create AdapterRecord from extracted data."""
     return AdapterRecord(
         source_currency_code=currency,
         category=category,
@@ -174,6 +211,7 @@ def _make(currency, category, buying, selling, buy_text, sell_text, eff_date, da
 
 
 def _parse_date(raw) -> Optional[date]:
+    """Parse YYYY-MM-DD date string."""
     if not raw:
         return None
     try:
@@ -183,6 +221,7 @@ def _parse_date(raw) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely convert raw value to normalized Decimal rate."""
     if raw is None or str(raw).strip() in ("", "0", "0.0000"):
         return None
     try:
@@ -191,11 +230,37 @@ def _safe_rate(raw) -> Optional[Decimal]:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backward Compatibility Wrappers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse(raw_json: str) -> tuple:
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use AwashAdapter().parse().
+    
+    Args:
+        raw_json: Raw JSON string from AJAX endpoint
+        
+    Returns:
+        Tuple of (records, errors) for backward compatibility
+    """
+    adapter = AwashAdapter()
+    result = adapter.parse(raw_json)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_json: str) -> str:
-    try:
-        data = json.loads(raw_json)
-        currencies = sorted(data["data"]["rates"].keys())
-        rate_keys = sorted(next(iter(data["data"]["rates"].values())).keys())
-        return hashlib.sha256(str({"currencies": currencies, "rate_keys": rate_keys}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"awash:unparseable").hexdigest()
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use AwashAdapter().schema_fingerprint().
+    
+    Args:
+        raw_json: Raw JSON string from AJAX endpoint
+        
+    Returns:
+        SHA256 hash of structural signature
+    """
+    return AwashAdapter().schema_fingerprint(raw_json)

@@ -20,6 +20,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -28,26 +29,87 @@ SOURCE_URL = "https://api.addisbanksc.com/api/exchange-rates"
 ETB_ROW_ID = 1  # quote currency row — always skip
 
 
+class ADIBAdapter(JSONAdapter):
+    """
+    Addis International Bank adapter using JSONAdapter base class.
+    
+    Parses JSON array with wide rows containing multiple rate categories.
+    Emits 0-2 records per currency row (transactional + weighted_average).
+    """
+    
+    def get_source_url(self) -> str:
+        """Return ADIB API URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_data(self, data, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from parsed JSON data.
+        
+        Args:
+            data: Parsed JSON (should be list of currency rows)
+            **options: Additional options (unused)
+        
+        Returns:
+            ParseResult with records and any errors
+        
+        Raises:
+            ValueError: If data is not a JSON array
+        """
+        if not isinstance(data, list):
+            raise ValueError(
+                f"ADIB: expected JSON array at top level, got {type(data).__name__}"
+            )
+        
+        records = []
+        for row in data:
+            records.extend(_parse_row(row))
+        
+        result = ParseResult()
+        result.records = records
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """
+        Deterministic hash of the structural signature (field names of first non-ETB row).
+        Triggers raw capture on schema change.
+        """
+        try:
+            data = json.loads(raw_content)
+            if isinstance(data, list):
+                for row in data:
+                    if isinstance(row, dict) and row.get("id") != ETB_ROW_ID:
+                        keys = sorted(row.keys())
+                        payload = json.dumps(keys, separators=(",", ":"))
+                        return hashlib.sha256(payload.encode()).hexdigest()
+        except Exception:
+            pass
+        return hashlib.sha256(b"adib:empty_or_unparseable").hexdigest()
+
+
+# ── Backward Compatibility Wrappers ──────────────────────────────────────────
+
 def parse(raw_json: str) -> list:
     """
     Parse the raw JSON response string into a list of AdapterRecord.
+    
+    BACKWARD COMPATIBILITY WRAPPER: New code should use ADIBAdapter().parse()
+    
     Raises ValueError if the top-level structure is not a JSON array.
     Returns an empty list for an empty array.
     """
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"ADIB: JSON parse error: {exc}") from exc
-
-    if not isinstance(data, list):
-        raise ValueError(
-            f"ADIB: expected JSON array at top level, got {type(data).__name__}"
-        )
-
-    records = []
-    for row in data:
-        records.extend(_parse_row(row))
-    return records
+    adapter = ADIBAdapter()
+    result = adapter.parse(raw_json)
+    
+    # Old API raised ValueError on errors, new API returns ParseResult with errors
+    # Convert back to old behavior for backward compatibility
+    if result.errors:
+        raise ValueError(result.errors[0])
+    
+    return result.records
 
 
 def _parse_row(row: dict) -> list:
@@ -147,17 +209,8 @@ def _rate_text(buying, selling) -> str:
 
 def schema_fingerprint(raw_json: str) -> str:
     """
-    Deterministic hash of the structural signature (field names of first non-ETB row).
-    Triggers raw capture on schema change.
+    Deterministic hash of the structural signature.
+    
+    BACKWARD COMPATIBILITY WRAPPER: New code should use ADIBAdapter().schema_fingerprint()
     """
-    try:
-        data = json.loads(raw_json)
-        if isinstance(data, list):
-            for row in data:
-                if isinstance(row, dict) and row.get("id") != ETB_ROW_ID:
-                    keys = sorted(row.keys())
-                    payload = json.dumps(keys, separators=(",", ":"))
-                    return hashlib.sha256(payload.encode()).hexdigest()
-    except Exception:
-        pass
-    return hashlib.sha256(b"adib:empty_or_unparseable").hexdigest()
+    return ADIBAdapter().schema_fingerprint(raw_json)

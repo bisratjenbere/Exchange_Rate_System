@@ -16,6 +16,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from adapters.base import HTMLTableAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -37,21 +38,52 @@ _SECTION_MAP = {
 }
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    if not tables:
-        return [], ["table_0:missing"]
-
-    records, errors = [], []
-    try:
-        records, errors = _parse_table(tables[0])
-    except Exception as exc:
-        errors.append(f"table_0:{exc}")
-    return records, errors
+class BOAAdapter(HTMLTableAdapter):
+    """
+    Bank of Abyssinia adapter using HTMLTableAdapter base class.
+    
+    Type E adapter with section headers dividing a single table into cash and transactional sections.
+    """
+    
+    def get_source_url(self) -> str:
+        """Return BOA website URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from BOA HTML table.
+        
+        Args:
+            soup: BeautifulSoup parsed HTML
+            tables: List of table elements (expecting 1 table)
+            **options: Not used by BOA
+            
+        Returns:
+            ParseResult with extracted records and any errors
+        """
+        result = ParseResult()
+        
+        if not tables:
+            result.add_error("table_0:missing")
+            return result
+        
+        try:
+            records, errors = _parse_table(tables[0])
+            result.records.extend(records)
+            for error in errors:
+                result.add_error(error)
+        except Exception as exc:
+            result.add_error(f"table_0:{exc}")
+        
+        return result
 
 
 def _parse_table(table) -> tuple:
+    """Parse BOA single table with section headers."""
     rows = table.find_all("tr")
     effective_date = None
     current_category = None
@@ -112,6 +144,7 @@ def _parse_table(table) -> tuple:
 
 
 def _detect_section(text: str) -> Optional[str]:
+    """Detect section header (Cash Rates / Transactional Rates)."""
     t = text.lower()
     for key, cat in _SECTION_MAP.items():
         if key in t and "rate" in t:
@@ -120,6 +153,7 @@ def _detect_section(text: str) -> Optional[str]:
 
 
 def _parse_date(text: str) -> Optional[date]:
+    """Parse date from text using month name pattern."""
     m = _DATE_RE.search(text)
     if not m:
         return None
@@ -133,19 +167,44 @@ def _parse_date(text: str) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely convert raw value to normalized Decimal rate."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backward Compatibility Wrappers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse(raw_html: str) -> tuple:
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use BOAAdapter().parse().
+    
+    Args:
+        raw_html: Raw HTML string from BOA website
+        
+    Returns:
+        Tuple of (records, errors) for backward compatibility
+    """
+    adapter = BOAAdapter()
+    result = adapter.parse(raw_html)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        rows = tables[0].find_all("tr") if tables else []
-        first_cells = [c.get_text(strip=True) for c in rows[0].find_all(["td", "th"])] if rows else []
-        payload = str({"tables": len(tables), "first_row": first_cells})
-        return hashlib.sha256(payload.encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"boa:unparseable").hexdigest()
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use BOAAdapter().schema_fingerprint().
+    
+    Args:
+        raw_html: Raw HTML string
+        
+    Returns:
+        SHA256 hash of table structure
+    """
+    return BOAAdapter().schema_fingerprint(raw_html)

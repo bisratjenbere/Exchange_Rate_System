@@ -1,16 +1,15 @@
 """
 adapters/hibret/adapter.py — Hibret Bank.
 """
-import hashlib
 import re
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Optional
-
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from adapters.base import HTMLTableAdapter, ParseResult
 
 ADAPTER_KEY = "hibret_html"
 SOURCE_URL = "https://www.hibretbank.com.et/about/exchange-rate/"
@@ -24,33 +23,47 @@ _CODE_ALIASES = {
 }
 
 
+class HibretAdapter(HTMLTableAdapter):
+    """Hibret Bank adapter - single table with cash and transactional columns."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
+        """Process single table from Hibret Bank with date extraction."""
+        result = ParseResult()
+        
+        effective_date = _parse_date(soup)
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        try:
+            records = _parse_cash_txn_table(tables[0], effective_date, date_basis)
+            result.records.extend(records)
+        except Exception as exc:
+            result.add_error(f"table_0_cash_txn:{exc}")
+        
+        return result
+
+
 def _parse_date(soup) -> Optional[date]:
+    """Extract date from page text in format like 'Jan 15, 2024'."""
     text = soup.get_text(" ")
     m = re.search(r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}', text)
     if m:
         raw = re.sub(r'\s+', ' ', m.group(0).strip())
         for fmt in ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y"):
-            try: return datetime.strptime(raw, fmt).date()
-            except ValueError: pass
+            try: 
+                return datetime.strptime(raw, fmt).date()
+            except ValueError: 
+                pass
     return None
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    effective_date = _parse_date(soup)
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-    tables = soup.find_all("table")
-    if not tables:
-        return [], ["table_0_cash_txn:missing"]
-    records, errors = [], []
-    try:
-        records.extend(_parse_cash_txn_table(tables[0], effective_date, date_basis))
-    except Exception as exc:
-        errors.append(f"table_0_cash_txn:{exc}")
-    return records, errors
-
-
 def _parse_cash_txn_table(table, effective_date, date_basis) -> list:
+    """Parse table with cash and transactional columns."""
     rows = table.find_all("tr")
     data_rows = [r for r in rows if r.find("td")]
     if not data_rows:
@@ -72,7 +85,6 @@ def _parse_cash_txn_table(table, effective_date, date_basis) -> list:
             selling = _safe_rate(cells[sell_idx])
             if buying is None and selling is None:
                 continue
-            key = f"{effective_date}:{currency_code}:{category}" if effective_date else None
             records.append(AdapterRecord(
                 source_currency_code=currency_code,
                 category=category,
@@ -91,17 +103,24 @@ def _parse_cash_txn_table(table, effective_date, date_basis) -> list:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Convert raw rate string to Decimal, returning None on failure."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+# ============================================================================
+
+_adapter_instance = HibretAdapter()
+
+def parse(raw_html: str) -> tuple:
+    """Parse Hibret Bank HTML into records. Module-level wrapper."""
+    result = _adapter_instance.parse(raw_html)
+    return result.records, result.errors
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = [[c.get_text(strip=True) for c in t.find_all("tr")[0].find_all(["th", "td"])] for t in tables if t.find_all("tr")]
-        return hashlib.sha256(str({"tables": len(tables), "headers": sig}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"hibret:unparseable").hexdigest()
+    """Generate schema fingerprint. Module-level wrapper."""
+    return _adapter_instance.schema_fingerprint(raw_html)

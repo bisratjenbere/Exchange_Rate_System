@@ -16,6 +16,7 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from adapters.base import HTMLTableAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -29,21 +30,50 @@ _CATEGORIES = [
 ]
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    if not tables:
-        return [], ["table_0:missing"]
-
-    records, errors = [], []
-    try:
-        records = _parse_wide_table(tables[0])
-    except Exception as exc:
-        errors.append(f"table_0:{exc}")
-    return records, errors
+class BunnaAdapter(HTMLTableAdapter):
+    """
+    Bunna Bank adapter using HTMLTableAdapter base class.
+    
+    Type E adapter with wide table containing all three categories (cash, transactional, weighted_average).
+    """
+    
+    def get_source_url(self) -> str:
+        """Return Bunna Bank website URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from Bunna HTML table.
+        
+        Args:
+            soup: BeautifulSoup parsed HTML
+            tables: List of table elements (expecting 1 table)
+            **options: Not used by Bunna
+            
+        Returns:
+            ParseResult with extracted records and any errors
+        """
+        result = ParseResult()
+        
+        if not tables:
+            result.add_error("table_0:missing")
+            return result
+        
+        try:
+            records = _parse_wide_table(tables[0])
+            result.records.extend(records)
+        except Exception as exc:
+            result.add_error(f"table_0:{exc}")
+        
+        return result
 
 
 def _parse_wide_table(table) -> list:
+    """Parse Bunna's wide table with all three categories in columns."""
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -80,20 +110,44 @@ def _parse_wide_table(table) -> list:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely convert raw value to normalized Decimal rate."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backward Compatibility Wrappers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse(raw_html: str) -> tuple:
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use BunnaAdapter().parse().
+    
+    Args:
+        raw_html: Raw HTML string from Bunna Bank
+        
+    Returns:
+        Tuple of (records, errors) for backward compatibility
+    """
+    adapter = BunnaAdapter()
+    result = adapter.parse(raw_html)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = [
-            [c.get_text(strip=True) for c in t.find_all("tr")[0].find_all(["th", "td"])]
-            for t in tables if t.find_all("tr")
-        ]
-        return hashlib.sha256(str({"tables": len(tables), "headers": sig}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"bunna:unparseable").hexdigest()
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use BunnaAdapter().schema_fingerprint().
+    
+    Args:
+        raw_html: Raw HTML string
+        
+    Returns:
+        SHA256 hash of table structure
+    """
+    return BunnaAdapter().schema_fingerprint(raw_html)

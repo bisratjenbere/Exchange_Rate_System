@@ -21,6 +21,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 
@@ -28,26 +29,70 @@ ADAPTER_KEY = "gadaa_api"
 SOURCE_URL = "https://gadaabank.com.et/api/v1/exchange-rates"
 
 
-def parse(raw_json: str) -> tuple:
-    try:
-        data = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        return [], [f"json_parse:{exc}"]
-
-    rows = data.get("data", [])
-    if not isinstance(rows, list):
-        return [], ["data_not_array"]
-
-    records, errors = [], []
-    for row in rows:
+class GadaaAdapter(JSONAdapter):
+    """
+    Gadaa Bank adapter using JSONAdapter base class.
+    
+    Parses JSON from REST API with market_type field determining category.
+    Emits up to 2 records per currency (market_type + weighted_average).
+    """
+    
+    def get_source_url(self) -> str:
+        """Return Gadaa API URL."""
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        """Return unique adapter identifier."""
+        return ADAPTER_KEY
+    
+    def _process_data(self, data, **options) -> ParseResult:
+        """
+        Extract AdapterRecords from parsed JSON data.
+        
+        Args:
+            data: Parsed JSON (should be dict with 'data' array)
+            **options: Additional options (unused)
+        
+        Returns:
+            ParseResult with records and any errors
+        """
+        result = ParseResult()
+        
+        rows = data.get("data", [])
+        if not isinstance(rows, list):
+            result.add_error("data_not_array")
+            return result
+        
+        for row in rows:
+            try:
+                records = _parse_row(row)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"row:{row.get('currency')}:{exc}")
+        
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """
+        Generate schema fingerprint based on data array keys.
+        
+        Args:
+            raw_content: Raw JSON string
+            
+        Returns:
+            SHA256 hex digest of structural signature
+        """
         try:
-            records.extend(_parse_row(row))
-        except Exception as exc:
-            errors.append(f"row:{row.get('currency')}:{exc}")
-    return records, errors
+            data = json.loads(raw_content)
+            rows = data.get("data", [])
+            keys = sorted(rows[0].keys()) if rows else []
+            return hashlib.sha256(str({"keys": keys}).encode()).hexdigest()
+        except Exception:
+            return hashlib.sha256(b"gadaa:unparseable").hexdigest()
 
 
 def _parse_row(row: dict) -> list:
+    """Parse one data row into up to 2 AdapterRecords."""
     code = str(row.get("currency", "")).strip()
     if not code or not row.get("is_active", True):
         return []
@@ -75,6 +120,7 @@ def _parse_row(row: dict) -> list:
 
 
 def _make(code, category, buying, selling, buy_text, sell_text, eff_date, date_basis, row):
+    """Create AdapterRecord from extracted data."""
     return AdapterRecord(
         source_currency_code=code,
         category=category,
@@ -93,6 +139,7 @@ def _make(code, category, buying, selling, buy_text, sell_text, eff_date, date_b
 
 
 def _parse_date(raw) -> Optional[date]:
+    """Parse ISO date from timestamp string."""
     if not raw:
         return None
     try:
@@ -102,6 +149,7 @@ def _parse_date(raw) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Safely convert raw value to normalized Decimal rate."""
     if raw is None or raw == 0:
         return None
     try:
@@ -110,11 +158,37 @@ def _safe_rate(raw) -> Optional[Decimal]:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Backward Compatibility Wrappers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse(raw_json: str) -> tuple:
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use GadaaAdapter().parse().
+    
+    Args:
+        raw_json: Raw JSON string from Gadaa API
+        
+    Returns:
+        Tuple of (records, errors) for backward compatibility
+    """
+    adapter = GadaaAdapter()
+    result = adapter.parse(raw_json)
+    return result.records, result.errors
+
+
 def schema_fingerprint(raw_json: str) -> str:
-    try:
-        data = json.loads(raw_json)
-        rows = data.get("data", [])
-        keys = sorted(rows[0].keys()) if rows else []
-        return hashlib.sha256(str({"keys": keys}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"gadaa:unparseable").hexdigest()
+    """
+    Old function API (for backward compatibility).
+    
+    New code should use GadaaAdapter().schema_fingerprint().
+    
+    Args:
+        raw_json: Raw JSON string
+        
+    Returns:
+        SHA256 hash of structural signature
+    """
+    return GadaaAdapter().schema_fingerprint(raw_json)

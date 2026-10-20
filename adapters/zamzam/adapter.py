@@ -14,16 +14,15 @@ Parse rules:
 - Currency format: "CODE – Name" → extract code as first token before " –".
 - Partial failure: returns (records, errors). Never raises.
 """
-import hashlib
 import re
 from datetime import date
 from decimal import Decimal
 from typing import Optional
-
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from adapters.base import HTMLTableAdapter, ParseResult
 
 ADAPTER_KEY = "zamzam_html"
 SOURCE_URL = "https://zamzambank.com/exchange-rates/"
@@ -37,36 +36,48 @@ _MONTH_MAP = {
 }
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    tables = soup.find_all("table")
-    text = soup.get_text(" ", strip=True)
-
-    effective_date = _extract_date(text)
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-
-    records, errors = [], []
-
-    if not tables:
-        return [], ["table_0:missing", "table_1:missing"]
-
-    try:
-        records.extend(_parse_cash_txn(tables[0], effective_date, date_basis))
-    except Exception as exc:
-        errors.append(f"table_0_cash_txn:{exc}")
-
-    if len(tables) < 2:
-        errors.append("table_1_weighted:missing")
-    else:
+class ZamzamAdapter(HTMLTableAdapter):
+    """ZamZam Bank adapter - 2 tables (cash/transactional + weighted_average)."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
+        """Process 2 tables from ZamZam Bank with date extraction."""
+        result = ParseResult()
+        
+        text = soup.get_text(" ", strip=True)
+        effective_date = _extract_date(text)
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        if len(tables) < 1:
+            result.add_error("table_0:missing")
+            result.add_error("table_1:missing")
+            return result
+        
         try:
-            records.extend(_parse_weighted(tables[1], effective_date, date_basis))
+            records = _parse_cash_txn(tables[0], effective_date, date_basis)
+            result.records.extend(records)
         except Exception as exc:
-            errors.append(f"table_1_weighted:{exc}")
-
-    return records, errors
+            result.add_error(f"table_0_cash_txn:{exc}")
+        
+        if len(tables) < 2:
+            result.add_error("table_1_weighted:missing")
+        else:
+            try:
+                records = _parse_weighted(tables[1], effective_date, date_basis)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"table_1_weighted:{exc}")
+        
+        return result
 
 
 def _parse_cash_txn(table, effective_date, date_basis: str) -> list:
+    """Parse table 0 with cash and transactional columns."""
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -87,6 +98,7 @@ def _parse_cash_txn(table, effective_date, date_basis: str) -> list:
 
 
 def _parse_weighted(table, effective_date, date_basis: str) -> list:
+    """Parse table 1 with weighted_average columns."""
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -106,6 +118,7 @@ def _parse_weighted(table, effective_date, date_basis: str) -> list:
 
 
 def _make_record(code, category, buying, selling, buy_text, sell_text, effective_date, date_basis):
+    """Create AdapterRecord from extracted data."""
     return AdapterRecord(
         source_currency_code=code,
         category=category,
@@ -132,6 +145,7 @@ def _parse_code(text: str) -> str:
 
 
 def _extract_date(text: str) -> Optional[date]:
+    """Extract date from text in format like 'October 13, 2026'."""
     for m in _DATE_RE.finditer(text):
         month = _MONTH_MAP.get(m.group(1).lower())
         if not month:
@@ -146,20 +160,24 @@ def _extract_date(text: str) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Convert raw rate string to Decimal, returning None on failure."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+# ============================================================================
+
+_adapter_instance = ZamzamAdapter()
+
+def parse(raw_html: str) -> tuple:
+    """Parse ZamZam Bank HTML into records. Module-level wrapper."""
+    result = _adapter_instance.parse(raw_html)
+    return result.records, result.errors
+
 def schema_fingerprint(raw_html: str) -> str:
-    try:
-        soup = BeautifulSoup(raw_html, "html.parser")
-        tables = soup.find_all("table")
-        sig = [
-            [c.get_text(strip=True) for c in t.find_all("tr")[0].find_all(["th", "td"])]
-            for t in tables if t.find_all("tr")
-        ]
-        return hashlib.sha256(str({"tables": len(tables), "headers": sig}).encode()).hexdigest()
-    except Exception:
-        return hashlib.sha256(b"zamzam:unparseable").hexdigest()
+    """Generate schema fingerprint. Module-level wrapper."""
+    return _adapter_instance.schema_fingerprint(raw_html)

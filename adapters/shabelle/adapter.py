@@ -18,16 +18,15 @@ Parse rules:
 - Date basis: source_published if date found, else collection_date_fallback.
 - Partial failure: returns (records, errors). Never raises.
 """
-import hashlib
 import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from adapters.base import BankAdapter, ParseResult
 
 ADAPTER_KEY = "shabelle_html"
 SOURCE_URL = "https://shabellebank.com/"
@@ -35,26 +34,57 @@ SOURCE_URL = "https://shabellebank.com/"
 _CODE_MAP = {"usd": "USD", "euro": "EUR", "eur": "EUR", "uae": "AED"}
 
 
-def parse(raw_html: str) -> tuple:
-    soup = BeautifulSoup(raw_html, "html.parser")
-
-    effective_date = _parse_date(soup)
-    date_basis = "source_published" if effective_date else "collection_date_fallback"
-
-    blocks = soup.find_all("div", class_="exchange-block-one")
-    if not blocks:
-        return [], ["no_exchange_blocks"]
-
-    records, errors = [], []
-    for block in blocks:
+class ShabelleAdapter(BankAdapter):
+    """Shabelle Bank adapter - custom div-based structure (not table-based)."""
+    
+    def get_source_url(self) -> str:
+        return SOURCE_URL
+    
+    def get_adapter_key(self) -> str:
+        return ADAPTER_KEY
+    
+    def parse(self, raw_content: str, **options) -> ParseResult:
+        """Parse Shabelle Bank HTML from div.exchange-block-one elements."""
+        result = ParseResult()
+        
+        soup = BeautifulSoup(raw_content, "html.parser")
+        
+        effective_date = _parse_date(soup)
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
+        blocks = soup.find_all("div", class_="exchange-block-one")
+        if not blocks:
+            result.add_error("no_exchange_blocks")
+            return result
+        
+        for block in blocks:
+            try:
+                records = _parse_block(block, effective_date, date_basis)
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"block:{exc}")
+        
+        return result
+    
+    def schema_fingerprint(self, raw_content: str) -> str:
+        """Generate fingerprint based on div block structure."""
         try:
-            records.extend(_parse_block(block, effective_date, date_basis))
-        except Exception as exc:
-            errors.append(f"block:{exc}")
-    return records, errors
+            soup = BeautifulSoup(raw_content, "html.parser")
+            blocks = soup.find_all("div", class_="exchange-block-one")
+            codes = []
+            for b in blocks:
+                h4 = b.find("h4")
+                if h4:
+                    codes.append(h4.get_text(strip=True))
+            import hashlib
+            return hashlib.sha256(str({"blocks": len(blocks), "codes": codes}).encode()).hexdigest()
+        except Exception:
+            import hashlib
+            return hashlib.sha256(b"shabelle:unparseable").hexdigest()
 
 
 def _parse_block(block, effective_date, date_basis) -> list:
+    """Parse a single exchange block (one currency with cash/transactional boxes)."""
     records = []
     for box_class, category in [("upper-box", "cash"), ("lower-box", "transactional")]:
         box = block.find("div", class_=box_class)
@@ -99,6 +129,7 @@ def _parse_block(block, effective_date, date_basis) -> list:
 
 
 def _parse_date(soup) -> Optional[date]:
+    """Parse date from page text like 'Applicable on 08-October -2026'."""
     # "Applicable on 08-October -2026" or "Applicable on 08-October-2026"
     text = soup.get_text(" ")
     m = re.search(r"Applicable\s+on\s+([\d]{1,2})[- ]+(\w+)\s*[-]?\s*(\d{4})", text, re.I)
@@ -114,6 +145,7 @@ def _parse_date(soup) -> Optional[date]:
 
 
 def _safe_rate(raw) -> Optional[Decimal]:
+    """Convert raw rate string to Decimal, returning None on failure."""
     if not raw or str(raw).strip().lower() in ("no trade", "no_trade", "-", ""):
         return None
     try:
@@ -122,12 +154,17 @@ def _safe_rate(raw) -> Optional[Decimal]:
         return None
 
 
+# ============================================================================
+# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
+# ============================================================================
+
+_adapter_instance = ShabelleAdapter()
+
+def parse(raw_html: str) -> tuple:
+    """Parse Shabelle Bank HTML into records. Module-level wrapper."""
+    result = _adapter_instance.parse(raw_html)
+    return result.records, result.errors
+
 def schema_fingerprint(raw_html: str) -> str:
-    soup = BeautifulSoup(raw_html, "html.parser")
-    blocks = soup.find_all("div", class_="exchange-block-one")
-    codes = []
-    for b in blocks:
-        h4 = b.find("h4")
-        if h4:
-            codes.append(h4.get_text(strip=True))
-    return hashlib.sha256(str({"blocks": len(blocks), "codes": codes}).encode()).hexdigest()
+    """Generate schema fingerprint. Module-level wrapper."""
+    return _adapter_instance.schema_fingerprint(raw_html)
