@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>USD Rates — All Banks</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f4f6f9; color: #1a1a1a; font-size: 0.9rem; }
+    header { background: #1a3a5c; color: #fff; padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+    header h1 { font-size: 1.1rem; font-weight: 700; }
+    header .sub { font-size: 0.8rem; opacity: 0.7; margin-left: auto; }
+    nav { background: #fff; border-bottom: 2px solid #e8edf2; padding: 0 1.5rem; display: flex; gap: 0; }
+    nav a { display: inline-block; padding: 0.7rem 1.2rem; text-decoration: none; color: #666;
+            border-bottom: 3px solid transparent; font-size: 0.85rem; font-weight: 500; margin-bottom: -2px; }
+    nav a:hover { color: #1a3a5c; }
+    nav a.active { color: #1a3a5c; border-bottom-color: #1a3a5c; }
+
+    .toolbar { background: #fff; border-bottom: 1px solid #e8edf2; padding: 0.6rem 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+    .toggle { display: flex; border: 1px solid #ccc; border-radius: 6px; overflow: hidden; }
+    .toggle a { padding: 0.35rem 1.1rem; font-size: 0.83rem; font-weight: 600; text-decoration: none; color: #555; background: #fff; }
+    .toggle a.active { background: #1a3a5c; color: #fff; }
+    .label { font-size: 0.82rem; color: #666; font-weight: 600; }
+    .hint { font-size: 0.78rem; color: #888; }
+
+    /* Category explanation banner */
+    .cat-banner { padding: 0.5rem 1.5rem; font-size: 0.8rem; border-bottom: 1px solid #e8edf2; }
+    .cat-banner.transfer { background: #eef4ff; color: #1a3a5c; }
+    .cat-banner.cash     { background: #fff8e6; color: #7a5500; }
+    .cat-banner strong   { font-weight: 700; }
+
+    .wrap { padding: 1.2rem 1.5rem; overflow-x: auto; }
+
+    table { border-collapse: collapse; background: #fff;
+            border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); overflow: hidden; }
+
+    /* Sticky date column */
+    th.date-col, td.date-col {
+      position: sticky; left: 0; z-index: 2; background: #f7f9fb; min-width: 110px;
+    }
+    td.date-col { background: #fff; }
+    tr:hover td.date-col { background: #fafbfc; }
+
+    /* Header rows */
+    tr.bank-header th {
+      background: #f7f9fb; color: #1a3a5c; font-size: 0.72rem; font-weight: 800;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      padding: 0.55rem 0.5rem; text-align: center;
+      border-bottom: 1px solid #e8edf2; border-right: 1px solid #e8edf2;
+      white-space: nowrap;
+    }
+    tr.bank-header th.date-col { text-align: left; }
+    tr.subheader th {
+      background: #f0f4f8; color: #888; font-size: 0.68rem; font-weight: 600;
+      padding: 0.3rem 0.5rem; text-align: center;
+      border-bottom: 2px solid #d0d8e4; border-right: 1px solid #e8edf2;
+      white-space: nowrap;
+    }
+    tr.subheader th.date-col { text-align: left; color: #555; }
+
+    /* Data cells */
+    td { padding: 0.38rem 0.5rem; border-bottom: 1px solid #f0f2f5;
+         text-align: right; font-variant-numeric: tabular-nums; font-size: 0.82rem;
+         white-space: nowrap; border-right: 1px solid #f0f2f5; }
+    td.date-col { text-align: left; font-weight: 700; color: #1a3a5c; font-size: 0.83rem; }
+    tr:hover td { background: #fafbfc; }
+
+    /* Best buying rate highlight */
+    td.best-buy { background: #f0faf3 !important; color: #1a7a3a; font-weight: 700; }
+
+    /* Selling rate — slightly muted */
+    td.sell-cell { color: #c0392b; }
+    td.best-buy.sell-cell { color: #1a7a3a; }
+
+    .na { color: #d0d5dd; font-size: 0.75rem; }
+
+    /* Bank separator: right border after each bank's 2 columns */
+    td.bank-end, th.bank-end { border-right: 2px solid #d0d8e4 !important; }
+
+    .legend { margin-top: 0.8rem; font-size: 0.78rem; color: #666; display: flex; gap: 1.5rem; flex-wrap: wrap; }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+           background: #f0faf3; border: 1px solid #27ae60; margin-right: 4px; }
+    .note { margin-top: 0.5rem; font-size: 0.75rem; color: #999; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🇺🇸 USD — All Banks Comparison</h1>
+  <span class="sub">Updated {{ now.strftime('%d %b %Y, %H:%M UTC') }}</span>
+</header>
+<nav>
+  <a href="/?view=compare&currency=USD">Compare Banks</a>
+  <a href="/?view=bank">By Bank</a>
+  <a href="/?view=all">All Rates</a>
+  <a href="/?view=history&currency=USD">History</a>
+  <a href="/usd" class="active">USD Matrix</a>
+  <a href="/review">Review</a>
+</nav>
+
+<div class="toolbar">
+  <span class="label">Rate Type:</span>
+  <div class="toggle">
+    <a href="/usd?category=transactional" class="{{ 'active' if category == 'transactional' }}">Transfer (Wire)</a>
+    <a href="/usd?category=cash"          class="{{ 'active' if category == 'cash' }}">Cash (Notes)</a>
+  </div>
+  <span class="hint">Each cell shows <strong>Buy / Sell</strong> in ETB per 1 USD</span>
+</div>
+
+{% if category == 'transactional' %}
+<div class="cat-banner transfer">
+  <strong>Transfer rates</strong> — used for wire transfers, remittances, and international payments. This is what most people need.
+  The bank <em>buys</em> USD from you (you receive ETB) and <em>sells</em> USD to you (you pay ETB).
+</div>
+{% else %}
+<div class="cat-banner cash">
+  <strong>Cash (banknote) rates</strong> — used when physically exchanging USD banknotes at a bank counter.
+  Cash rates are typically higher than transfer rates due to handling costs.
+</div>
+{% endif %}
+
+<div class="wrap">
+  {% if not dates %}
+    <p style="color:#888;padding:2rem">No USD {{ category }} data available.</p>
+  {% else %}
+  <table>
+    <thead>
+      <!-- Row 1: Bank codes spanning 2 columns each -->
+      <tr class="bank-header">
+        <th class="date-col">Date</th>
+        {% for code in banks %}
+          <th colspan="2" title="{{ bank_names[code] }}" class="{{ 'bank-end' if loop.last else '' }}">{{ code }}</th>
+        {% endfor %}
+      </tr>
+      <!-- Row 2: Buy / Sell sub-headers -->
+      <tr class="subheader">
+        <th class="date-col">↓ newest first</th>
+        {% for code in banks %}
+          <th title="Bank buys USD from you — you receive ETB">Buy</th>
+          <th class="{{ 'bank-end' if loop.last else '' }}" title="Bank sells USD to you — you pay ETB">Sell</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for date in dates %}
+      {% set row = matrix[date] %}
+      {% set best_buy = best_buying_per_date.get(date) %}
+      <tr>
+        <td class="date-col">{{ date.strftime('%d %b %Y') }}</td>
+        {% for code in banks %}
+          {% set cell = row.get(code) %}
+          {% if cell %}
+            {% set is_best = cell.buying is not none and cell.buying == best_buy %}
+            <td class="{{ 'best-buy' if is_best else '' }}">
+              {% if cell.buying is not none %}{{ "%.2f"|format(cell.buying|float) }}{% else %}<span class="na">—</span>{% endif %}
+            </td>
+            <td class="sell-cell {{ 'bank-end' if loop.last else '' }}">
+              {% if cell.selling is not none %}{{ "%.2f"|format(cell.selling|float) }}{% else %}<span class="na">—</span>{% endif %}
+            </td>
+          {% else %}
+            <td class="na">—</td>
+            <td class="na {{ 'bank-end' if loop.last else '' }}">—</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="legend">
+    <span><span class="dot"></span>Best buying rate on that date (bank pays you most ETB)</span>
+    <span style="color:#c0392b">■ Sell = ETB you pay per USD</span>
+    <span>— = no data for that date</span>
+  </div>
+  <p class="note">
+    ⚠️ <strong>weighted_average</strong> rates (NBE benchmark / bank-internal averages) are excluded from this view — they are not offered to customers directly.
+    Use the <a href="/?view=compare&currency=USD">Compare view</a> to see them.
+  </p>
+  {% endif %}
+</div>
+</body>
+</html>
