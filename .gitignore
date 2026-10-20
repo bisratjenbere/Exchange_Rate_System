@@ -189,3 +189,18 @@ config.local.py
 test_adhoc_*.py
 playground_*.py
 debug_*.py
+
+# ============================================================================
+# Development Artifacts & Debug Scripts
+# ============================================================================
+# Backup files
+*.backup
+*.bak
+*~
+
+# Ad-hoc check/debug scripts
+scripts/check_*.py
+
+# Performance test artifacts
+tests/performance/
+
