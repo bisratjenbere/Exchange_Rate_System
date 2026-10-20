@@ -6,372 +6,435 @@
   <title>Ethiopian Bank Exchange Rates</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #f4f6f9; color: #1a1a1a; font-size: 0.9rem; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f2f5; color: #1a1a1a; font-size: 0.9rem; }
 
     /* ── header ── */
-    header { background: #1a3a5c; color: #fff; padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    header h1 { font-size: 1.05rem; font-weight: 700; flex: 1; white-space: nowrap; }
-    .search-wrap { display: flex; gap: 0.4rem; flex: 1; max-width: 380px; }
-    .search-wrap input {
-      flex: 1; padding: 0.35rem 0.7rem; border: none; border-radius: 4px;
-      font-size: 0.85rem; background: rgba(255,255,255,0.15); color: #fff;
-      outline: none;
-    }
-    .search-wrap input::placeholder { color: rgba(255,255,255,0.55); }
-    .search-wrap input:focus { background: rgba(255,255,255,0.25); }
-    .search-wrap button {
-      padding: 0.35rem 0.8rem; background: #e8a020; color: #fff;
-      border: none; border-radius: 4px; font-size: 0.82rem; cursor: pointer; white-space: nowrap;
-    }
-    .search-wrap button:hover { background: #d4911a; }
-    .updated { font-size: 0.72rem; opacity: 0.6; white-space: nowrap; }
+    header { background: #0f2744; color: #fff; padding: 0 1.5rem; height: 56px; display: flex; align-items: center; gap: 1.2rem; }
+    .logo { font-size: 1rem; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; }
+    .logo span { color: #f5a623; }
+    .search-wrap { display: flex; gap: 0; flex: 1; max-width: 340px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.15); }
+    .search-wrap input { flex: 1; padding: 0.4rem 0.75rem; border: none; font-size: 0.85rem; background: rgba(255,255,255,0.1); color: #fff; outline: none; }
+    .search-wrap input::placeholder { color: rgba(255,255,255,0.4); }
+    .search-wrap input:focus { background: rgba(255,255,255,0.18); }
+    .search-wrap button { padding: 0 0.9rem; background: #f5a623; color: #fff; border: none; font-size: 0.82rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .search-wrap button:hover { background: #e09510; }
+    .header-right { margin-left: auto; font-size: 0.72rem; opacity: 0.5; white-space: nowrap; }
 
     /* ── nav ── */
-    nav { background: #fff; border-bottom: 2px solid #e8edf2; padding: 0 1.5rem; display: flex; gap: 0; }
-    nav a { display: inline-block; padding: 0.7rem 1.2rem; text-decoration: none; color: #666; border-bottom: 3px solid transparent; font-size: 0.85rem; font-weight: 500; margin-bottom: -2px; }
-    nav a.active { color: #1a3a5c; border-bottom-color: #1a3a5c; }
-    nav a:hover { color: #1a3a5c; }
+    nav { background: #fff; border-bottom: 1px solid #e2e6ea; padding: 0 1.5rem; display: flex; gap: 0; }
+    nav a { display: inline-block; padding: 0.75rem 1.1rem; text-decoration: none; color: #666; border-bottom: 3px solid transparent; font-size: 0.84rem; font-weight: 500; margin-bottom: -1px; transition: color 0.15s; }
+    nav a.active { color: #0f2744; border-bottom-color: #f5a623; font-weight: 700; }
+    nav a:hover:not(.active) { color: #0f2744; }
 
-    /* ── toolbar ── */
-    .toolbar { background: #fff; border-bottom: 1px solid #e8edf2; padding: 0.55rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-    .toolbar-group { display: flex; align-items: center; gap: 0.5rem; }
-    .toolbar label { font-size: 0.78rem; color: #888; font-weight: 500; }
-    .toolbar select { padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.85rem; background: #fff; cursor: pointer; }
-    .filter-toggle { display: flex; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }
-    .filter-toggle a { padding: 0.28rem 0.7rem; font-size: 0.78rem; text-decoration: none; color: #555; background: #fff; }
-    .filter-toggle a.active { background: #1a3a5c; color: #fff; }
-    .toolbar-right { margin-left: auto; font-size: 0.78rem; color: #999; }
+    /* ── rate type bar ── */
+    .rate-type-bar { background: #fff; border-bottom: 1px solid #e2e6ea; padding: 0.5rem 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+    .rt-label { font-size: 0.75rem; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .rt-tabs { display: flex; border: 1px solid #dde1e7; border-radius: 6px; overflow: hidden; }
+    .rt-tabs a { padding: 0.3rem 0.9rem; font-size: 0.8rem; font-weight: 500; text-decoration: none; color: #555; background: #fff; border-right: 1px solid #dde1e7; white-space: nowrap; }
+    .rt-tabs a:last-child { border-right: none; }
+    .rt-tabs a.active { background: #0f2744; color: #fff; }
+    .rt-tabs a:hover:not(.active) { background: #f5f7fa; }
+    .rt-desc { font-size: 0.75rem; color: #aaa; }
+    .rt-right { margin-left: auto; display: flex; align-items: center; gap: 1rem; }
+
+    /* currency selector */
+    .cur-form { display: flex; align-items: center; gap: 0.5rem; }
+    .cur-form label { font-size: 0.75rem; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .cur-form select { padding: 0.28rem 0.5rem; border: 1px solid #dde1e7; border-radius: 5px; font-size: 0.85rem; background: #fff; cursor: pointer; font-weight: 600; color: #0f2744; }
+
+    /* bank selector */
+    .bank-form { display: flex; align-items: center; gap: 0.5rem; }
+    .bank-form label { font-size: 0.75rem; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .bank-form select { padding: 0.28rem 0.5rem; border: 1px solid #dde1e7; border-radius: 5px; font-size: 0.84rem; background: #fff; cursor: pointer; min-width: 200px; }
+
+    /* filter toggle */
+    .filter-toggle { display: flex; border: 1px solid #dde1e7; border-radius: 6px; overflow: hidden; }
+    .filter-toggle a { padding: 0.28rem 0.7rem; font-size: 0.78rem; text-decoration: none; color: #555; background: #fff; border-right: 1px solid #dde1e7; }
+    .filter-toggle a:last-child { border-right: none; }
+    .filter-toggle a.active { background: #0f2744; color: #fff; }
 
     /* ── main ── */
-    main { padding: 1.25rem 1.5rem; }
+    main { padding: 1.25rem 1.5rem; max-width: 1200px; }
     .error { color: #c0392b; background: #fdf0ef; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
     .empty { color: #888; padding: 3rem 0; text-align: center; font-size: 0.95rem; }
     .summary { margin-top: 0.6rem; font-size: 0.75rem; color: #aaa; }
 
-    /* ── card wrapper ── */
-    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); overflow: hidden; }
+    /* ── card ── */
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); overflow: hidden; }
 
-    /* ── compare view: ranked bars ── */
-    .rank-list { list-style: none; }
-    .rank-item {
-      display: grid;
-      grid-template-columns: 2rem 1fr 7rem 7rem 6rem;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.7rem 1rem;
-      border-bottom: 1px solid #f0f2f5;
-    }
-    .rank-item:last-child { border-bottom: none; }
-    .rank-item:hover { background: #fafbfc; }
-    .rank-item.best { background: #f0faf3; }
-    .rank-pos { font-size: 0.8rem; color: #bbb; font-weight: 700; text-align: center; }
-    .rank-pos.gold   { color: #d4a017; }
-    .rank-pos.silver { color: #9e9e9e; }
-    .rank-pos.bronze { color: #cd7f32; }
-    .rank-bank { font-weight: 600; font-size: 0.88rem; }
-    .rank-bank small { display: block; font-weight: 400; font-size: 0.72rem; color: #999; margin-top: 0.1rem; }
-    .rank-bar-wrap { position: relative; height: 8px; background: #eef0f3; border-radius: 4px; overflow: hidden; }
-    .rank-bar { height: 100%; border-radius: 4px; background: #3a7bd5; transition: width 0.3s; }
-    .rank-item.best .rank-bar { background: #27ae60; }
-    .rank-buying { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.92rem; text-align: right; }
-    .rank-item.best .rank-buying { color: #1a7a3a; }
-    .rank-selling { font-variant-numeric: tabular-nums; font-size: 0.82rem; color: #888; text-align: right; }
-    .rank-meta { font-size: 0.72rem; color: #bbb; text-align: right; }
+    /* ── industry average bar ── */
+    .avg-bar { background: #f8f9fb; border-bottom: 1px solid #eef0f3; padding: 0.55rem 1.1rem; display: flex; align-items: center; gap: 1.5rem; font-size: 0.78rem; color: #666; }
+    .avg-bar strong { color: #0f2744; }
+    .avg-item { display: flex; align-items: center; gap: 0.4rem; }
+    .avg-dot { width: 8px; height: 8px; border-radius: 50%; background: #aaa; display: inline-block; }
+    .avg-dot.buy { background: #2ecc71; }
+    .avg-dot.sell { background: #e74c3c; }
 
-    /* ── compare header ── */
-    .compare-header {
+    /* ── compare / rank list ── */
+    .rank-header {
       display: grid;
-      grid-template-columns: 2rem 1fr 7rem 7rem 6rem;
+      grid-template-columns: 2.2rem 1fr 6.5rem 6.5rem 5rem 4.5rem;
       gap: 0.5rem;
       padding: 0.45rem 1rem;
       background: #f7f9fb;
       border-bottom: 1px solid #e8edf2;
-      font-size: 0.72rem;
-      font-weight: 600;
-      color: #888;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+      font-size: 0.7rem; font-weight: 700; color: #999;
+      text-transform: uppercase; letter-spacing: 0.05em;
     }
-    .compare-header span:nth-child(4),
-    .compare-header span:nth-child(5) { text-align: right; }
+    .rank-header span:nth-child(n+3) { text-align: right; }
+
+    .rank-list { list-style: none; }
+    .rank-item {
+      display: grid;
+      grid-template-columns: 2.2rem 1fr 6.5rem 6.5rem 5rem 4.5rem;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1rem;
+      border-bottom: 1px solid #f2f4f7;
+      transition: background 0.1s;
+    }
+    .rank-item:last-child { border-bottom: none; }
+    .rank-item:hover { background: #fafbfc; }
+    .rank-item.rank-best { background: #f0fdf4; }
+    .rank-item.rank-best:hover { background: #e8faf0; }
+    .rank-item.rank-avg-line { background: #fffbf0; border-top: 2px dashed #f5a623; }
+
+    .rank-pos { font-size: 0.78rem; color: #ccc; font-weight: 800; text-align: center; }
+    .rank-pos.gold   { color: #d4a017; }
+    .rank-pos.silver { color: #9e9e9e; }
+    .rank-pos.bronze { color: #cd7f32; }
+
+    .rank-bank { min-width: 0; }
+    .rank-bank-name { font-weight: 700; font-size: 0.88rem; color: #1a1a1a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rank-bank-code { font-size: 0.7rem; color: #aaa; font-weight: 500; margin-top: 0.05rem; }
+    .rank-bar-wrap { height: 4px; background: #eef0f3; border-radius: 2px; overflow: hidden; margin-top: 0.3rem; }
+    .rank-bar { height: 100%; border-radius: 2px; background: #3a7bd5; }
+    .rank-item.rank-best .rank-bar { background: #2ecc71; }
+
+    .rank-receive { text-align: right; }
+    .rank-receive-val { font-size: 1rem; font-weight: 800; color: #1a1a1a; font-variant-numeric: tabular-nums; }
+    .rank-item.rank-best .rank-receive-val { color: #16a34a; }
+    .rank-receive-label { font-size: 0.65rem; color: #bbb; margin-top: 0.05rem; }
+
+    .rank-pay { text-align: right; }
+    .rank-pay-val { font-size: 0.88rem; font-weight: 600; color: #555; font-variant-numeric: tabular-nums; }
+    .rank-pay-label { font-size: 0.65rem; color: #bbb; margin-top: 0.05rem; }
+
+    .rank-spread { text-align: right; font-size: 0.8rem; color: #888; font-variant-numeric: tabular-nums; }
+    .rank-spread small { display: block; font-size: 0.65rem; color: #bbb; }
+
+    .rank-delta { text-align: right; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+    .delta-up   { color: #16a34a; font-weight: 600; }
+    .delta-down { color: #dc2626; font-weight: 600; }
+    .delta-flat { color: #bbb; }
+    .rank-delta small { display: block; font-size: 0.65rem; color: #bbb; }
+
+    /* badges */
+    .badge { display: inline-block; padding: 0.08rem 0.3rem; border-radius: 3px; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.02em; vertical-align: middle; margin-left: 0.25rem; }
+    .badge-stale    { background: #fee2e2; color: #991b1b; }
+    .badge-ref      { background: #e0f2fe; color: #0369a1; }
+    .badge-prov     { background: #fef9c3; color: #854d0e; }
+    .badge-af       { background: #f3e8ff; color: #6b21a8; }
 
     /* ── by-bank view ── */
-    .bank-header { padding: 1rem 1.25rem; border-bottom: 1px solid #f0f2f5; }
-    .bank-header h2 { font-size: 1rem; font-weight: 700; color: #1a3a5c; }
-    .bank-meta { font-size: 0.75rem; color: #999; margin-top: 0.25rem; display: flex; gap: 1rem; flex-wrap: wrap; }
-    .bank-meta .fresh { color: #27ae60; }
-    .bank-meta .stale { color: #e74c3c; }
+    .bank-hero { padding: 1rem 1.25rem; border-bottom: 1px solid #f0f2f5; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .bank-hero-left h2 { font-size: 1.05rem; font-weight: 800; color: #0f2744; }
+    .bank-meta { font-size: 0.75rem; color: #999; margin-top: 0.3rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+    .bank-meta .fresh { color: #16a34a; font-weight: 600; }
+    .bank-meta .stale { color: #dc2626; font-weight: 600; }
 
     .pivot-table { width: 100%; border-collapse: collapse; }
-    .pivot-table th {
-      background: #f7f9fb; color: #666; font-size: 0.72rem; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.04em;
-      padding: 0.5rem 0.75rem; text-align: right; border-bottom: 1px solid #e8edf2;
-    }
+    .pivot-table th { background: #f7f9fb; color: #777; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.5rem 0.85rem; text-align: right; border-bottom: 1px solid #e8edf2; white-space: nowrap; }
     .pivot-table th:first-child { text-align: left; }
-    .pivot-table td { padding: 0.45rem 0.75rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
-    .pivot-table td:first-child { text-align: left; font-weight: 600; color: #333; }
+    .pivot-table th.cat-header { background: #f0f4f8; color: #0f2744; font-size: 0.72rem; text-align: center; border-left: 2px solid #e2e6ea; }
+    .pivot-table td { padding: 0.45rem 0.85rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+    .pivot-table td:first-child { text-align: left; font-weight: 700; color: #333; font-size: 0.88rem; }
     .pivot-table tr:last-child td { border-bottom: none; }
     .pivot-table tr:hover td { background: #fafbfc; }
     .pivot-table .na { color: #ddd; font-size: 0.75rem; }
-    .pivot-table .buy { color: #1a3a5c; }
-    .pivot-table .sell { color: #888; font-size: 0.78rem; }
+    .pivot-table .buy { color: #0f2744; font-weight: 700; }
+    .pivot-table .sell { color: #888; font-size: 0.8rem; }
+    .pivot-table .spread-cell { color: #aaa; font-size: 0.75rem; }
+    .cat-divider { border-left: 2px solid #e8edf2; }
     .show-all-wrap { padding: 0.75rem 1rem; text-align: center; border-top: 1px solid #f0f2f5; }
     .show-all-wrap a { font-size: 0.8rem; color: #3a7bd5; text-decoration: none; }
-    .show-all-wrap a:hover { text-decoration: underline; }
 
-    /* ── all-rates matrix ── */
+    /* ── matrix view ── */
     .matrix-wrap { overflow-x: auto; }
-    .matrix-table { width: 100%; border-collapse: collapse; min-width: 600px; }
-    .matrix-table th {
-      background: #f7f9fb; color: #666; font-size: 0.7rem; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.03em;
-      padding: 0.5rem 0.6rem; text-align: right; border-bottom: 1px solid #e8edf2;
-      white-space: nowrap;
-    }
-    .matrix-table th:first-child { text-align: left; position: sticky; left: 0; background: #f7f9fb; z-index: 1; }
-    .matrix-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.82rem; white-space: nowrap; }
+    .matrix-table { width: 100%; border-collapse: collapse; min-width: 700px; }
+    .matrix-table th { background: #f7f9fb; color: #777; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 0.5rem 0.5rem; text-align: right; border-bottom: 1px solid #e8edf2; white-space: nowrap; }
+    .matrix-table th:first-child { text-align: left; position: sticky; left: 0; background: #f7f9fb; z-index: 1; min-width: 60px; }
+    .matrix-table td { padding: 0.38rem 0.5rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.8rem; white-space: nowrap; }
     .matrix-table td:first-child { text-align: left; font-weight: 700; position: sticky; left: 0; background: #fff; z-index: 1; }
     .matrix-table tr:hover td { background: #fafbfc; }
     .matrix-table tr:hover td:first-child { background: #fafbfc; }
-    .matrix-table .best-cell { background: #f0faf3 !important; color: #1a7a3a; font-weight: 700; }
-    .matrix-table .na-cell { color: #e0e0e0; font-size: 0.72rem; }
+    .matrix-table .best-cell { background: #f0fdf4 !important; color: #16a34a; font-weight: 800; }
+    .matrix-table .na-cell { color: #e0e0e0; font-size: 0.7rem; }
+    .matrix-table td a { color: inherit; text-decoration: none; }
+    .matrix-table th a { color: inherit; text-decoration: none; }
 
     /* ── history view ── */
-    .hist-date-group { margin-bottom: 1.5rem; }
-    .hist-date-heading {
-      font-size: 0.8rem; font-weight: 700; color: #1a3a5c;
-      padding: 0.5rem 1rem; background: #f0f4f8;
-      border-bottom: 1px solid #e8edf2; letter-spacing: 0.03em;
-      display: flex; align-items: center; gap: 0.75rem;
-    }
+    .hist-date-group { margin-bottom: 1.25rem; }
+    .hist-date-heading { font-size: 0.82rem; font-weight: 700; color: #0f2744; padding: 0.55rem 1rem; background: #f0f4f8; border-bottom: 1px solid #e8edf2; display: flex; align-items: center; gap: 0.75rem; }
     .hist-date-heading .day-count { font-weight: 400; color: #999; font-size: 0.72rem; }
     .hist-table { width: 100%; border-collapse: collapse; }
-    .hist-table th {
-      background: #f7f9fb; color: #666; font-size: 0.72rem; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.04em;
-      padding: 0.45rem 0.75rem; text-align: right; border-bottom: 1px solid #e8edf2;
-    }
+    .hist-table th { background: #f7f9fb; color: #777; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.45rem 0.85rem; text-align: right; border-bottom: 1px solid #e8edf2; }
     .hist-table th:first-child { text-align: left; }
-    .hist-table td { padding: 0.4rem 0.75rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+    .hist-table td { padding: 0.4rem 0.85rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
     .hist-table td:first-child { text-align: left; font-weight: 600; color: #333; }
     .hist-table tr:last-child td { border-bottom: none; }
     .hist-table tr:hover td { background: #fafbfc; }
-    .hist-table .best-row td:first-child { color: #1a7a3a; }
-    .hist-table .buy { color: #1a3a5c; font-weight: 600; }
+    .hist-table .best-row td { background: #f0fdf4; }
+    .hist-table .best-row td:first-child { color: #16a34a; font-weight: 700; }
+    .hist-table .buy { color: #0f2744; font-weight: 700; }
     .hist-table .sell { color: #888; }
     .hist-table .na { color: #ddd; }
-    .change-up   { color: #27ae60; font-size: 0.75rem; }
-    .change-down { color: #e74c3c; font-size: 0.75rem; }
-    .change-flat { color: #bbb;    font-size: 0.75rem; }
-
-    /* ── badges ── */
-    .badge { display: inline-block; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.02em; vertical-align: middle; }
-    .provisional { background: #fff3cd; color: #856404; }
-    .pending     { background: #cfe2ff; color: #084298; }
-    .stale       { background: #f8d7da; color: #842029; }
+    .cat-pill { display: inline-block; padding: 0.08rem 0.35rem; border-radius: 3px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.02em; }
+    .cat-transfer  { background: #dbeafe; color: #1d4ed8; }
+    .cat-cash      { background: #dcfce7; color: #15803d; }
+    .cat-reference { background: #e0f2fe; color: #0369a1; }
+    .cat-unknown   { background: #f3f4f6; color: #6b7280; }
   </style>
 </head>
 <body>
 
-<!-- ── header ── -->
 <header>
-  <h1>🇪🇹 Ethiopian Bank Exchange Rates</h1>
+  <div class="logo">🇪🇹 ET<span>Forex</span></div>
   <form method="get" class="search-wrap" action="/">
     <input type="hidden" name="view" value="{{ view }}">
+    <input type="hidden" name="rate_type" value="{{ rate_type }}">
     {% if view == 'bank' and source_id %}<input type="hidden" name="source_id" value="{{ source_id }}">{% endif %}
-    <input
-      type="search" name="q" value="{{ q }}"
+    <input type="search" name="q" value="{{ q }}"
       placeholder="Search currency or bank…"
-      list="search-suggestions"
-      autocomplete="off"
-    >
+      list="search-suggestions" autocomplete="off">
     <datalist id="search-suggestions">
       {% for c in suggestions.currencies %}<option value="{{ c }}">{% endfor %}
       {% for b in suggestions.banks %}<option value="{{ b.name }}">{% endfor %}
     </datalist>
-    <button type="submit">Search</button>
+    <button type="submit">Go</button>
   </form>
-  <span class="updated">{{ now.strftime('%d %b %Y, %H:%M UTC') }}</span>
+  <div class="header-right">{{ now.strftime('%d %b %Y %H:%M') }} UTC</div>
 </header>
 
-<!-- ── nav ── -->
 <nav>
-  <a href="/?view=compare&currency={{ currency }}&filter={{ filt }}"
-     class="{{ 'active' if view == 'compare' }}">Compare Banks</a>
-  <a href="/?view=bank{% if source_id %}&source_id={{ source_id }}{% endif %}&filter={{ filt }}"
+  <a href="/?view=compare&currency={{ currency }}&rate_type={{ rate_type }}"
+     class="{{ 'active' if view == 'compare' }}">Best Rates</a>
+  <a href="/?view=bank{% if source_id %}&source_id={{ source_id }}{% endif %}&rate_type={{ rate_type }}&filter={{ filt }}"
      class="{{ 'active' if view == 'bank' }}">By Bank</a>
-  <a href="/?view=all&filter={{ filt }}"
-     class="{{ 'active' if view == 'all' }}">All Rates</a>
-  <a href="/?view=history&currency={{ currency }}"
+  <a href="/?view=all&filter={{ filt }}&rate_type={{ rate_type }}"
+     class="{{ 'active' if view == 'all' }}">All Currencies</a>
+  <a href="/?view=history&currency={{ currency }}&rate_type={{ rate_type }}"
      class="{{ 'active' if view == 'history' }}">History</a>
+  <a href="/usd">USD Matrix</a>
   <a href="/review">Review</a>
 </nav>
 
-<!-- ── toolbar ── -->
-<div class="toolbar">
+{% macro cat_label(cat) %}
+  {% if cat == 'transactional' %}<span class="cat-pill cat-transfer">Transfer</span>
+  {% elif cat == 'cash' %}<span class="cat-pill cat-cash">Cash</span>
+  {% elif cat == 'weighted_average' %}<span class="cat-pill cat-reference">Reference</span>
+  {% else %}<span class="cat-pill cat-unknown">{{ cat or '—' }}</span>{% endif %}
+{% endmacro %}
 
-  {% if view == "compare" %}
-  <div class="toolbar-group">
-    <label for="cur">Currency</label>
-    <form method="get" style="display:contents">
-      <input type="hidden" name="view" value="compare">
-      <input type="hidden" name="filter" value="{{ filt }}">
-      <select id="cur" name="currency" onchange="this.form.submit()">
+{% macro rt_url(rt) %}?view={{ view }}&currency={{ currency }}&rate_type={{ rt }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter={{ filt }}{% endmacro %}
+
+<!-- ── rate type + context bar ── -->
+<div class="rate-type-bar">
+  <span class="rt-label">Rate Type</span>
+  <div class="rt-tabs">
+    <a href="{{ rt_url('transactional') }}" class="{{ 'active' if rate_type == 'transactional' }}">Transfer (Wire)</a>
+    <a href="{{ rt_url('cash') }}" class="{{ 'active' if rate_type == 'cash' }}">Cash (Notes)</a>
+  </div>
+  <span class="rt-desc">
+    {% if rate_type == 'transactional' %}Wire transfers &amp; remittances — the rate you get when sending/receiving money electronically
+    {% else %}Physical banknote exchange at the bank counter — typically higher than transfer rates{% endif %}
+  </span>
+
+  <div class="rt-right">
+    {% if view == 'compare' or view == 'history' %}
+    <form method="get" class="cur-form">
+      <input type="hidden" name="view" value="{{ view }}">
+      <input type="hidden" name="rate_type" value="{{ rate_type }}">
+      <label for="cur-sel">Currency</label>
+      <select id="cur-sel" name="currency" onchange="this.form.submit()">
         {% for c in currencies %}
           <option value="{{ c }}" {{ 'selected' if c == currency }}>{{ c }}</option>
         {% endfor %}
       </select>
     </form>
-  </div>
-
-  {% elif view == "bank" %}
-  <div class="toolbar-group">
-    <label for="bank-sel">Bank</label>
-    <form method="get" style="display:contents">
+    {% elif view == 'bank' %}
+    <form method="get" class="bank-form">
       <input type="hidden" name="view" value="bank">
+      <input type="hidden" name="rate_type" value="{{ rate_type }}">
       <input type="hidden" name="filter" value="{{ filt }}">
+      <label for="bank-sel">Bank</label>
       <select id="bank-sel" name="source_id" onchange="this.form.submit()">
-        <option value="">— select bank —</option>
+        <option value="">— select —</option>
         {% for b in banks %}
           <option value="{{ b.id }}" {{ 'selected' if b.id == source_id }}>{{ b.name }}</option>
         {% endfor %}
       </select>
     </form>
-  </div>
+    {% elif view == 'all' %}
+    <div style="display:flex;align-items:center;gap:0.5rem">
+      <span style="font-size:0.75rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Show</span>
+      <div class="filter-toggle">
+        <a href="?view=all&filter=major&rate_type={{ rate_type }}" class="{{ 'active' if filt == 'major' }}">Major</a>
+        <a href="?view=all&filter=all&rate_type={{ rate_type }}" class="{{ 'active' if filt == 'all' }}">All</a>
+      </div>
+    </div>
+    {% endif %}
 
-  {% elif view == "history" %}
-  <div class="toolbar-group">
-    <label for="hist-cur">Currency</label>
-    <form method="get" style="display:contents">
-      <input type="hidden" name="view" value="history">
-      <select id="hist-cur" name="currency" onchange="this.form.submit()">
-        {% for c in currencies %}
-          <option value="{{ c }}" {{ 'selected' if c == currency }}>{{ c }}</option>
-        {% endfor %}
-      </select>
-    </form>
-  </div>
-  <div class="toolbar-group">
-    <label for="hist-date">Date</label>
-    <form method="get" style="display:contents">
+    {% if view == 'history' %}
+    <form method="get" style="display:flex;align-items:center;gap:0.5rem">
       <input type="hidden" name="view" value="history">
       <input type="hidden" name="currency" value="{{ currency }}">
-      <select id="hist-date" name="date" onchange="this.form.submit()">
+      <input type="hidden" name="rate_type" value="{{ rate_type }}">
+      <label style="font-size:0.75rem;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.05em">Date</label>
+      <select name="date" onchange="this.form.submit()" style="padding:0.28rem 0.5rem;border:1px solid #dde1e7;border-radius:5px;font-size:0.82rem">
         <option value="">All dates</option>
         {% for d in dates %}
           <option value="{{ d.isoformat() }}" {{ 'selected' if sel_date == d }}>{{ d.strftime('%d %b %Y') }}</option>
         {% endfor %}
       </select>
     </form>
-  </div>
-  {% endif %}
-
-  <!-- major / all filter (bank + all views) -->
-  {% if view in ('bank', 'all') %}
-  <div class="toolbar-group">
-    <label>Show</label>
-    <div class="filter-toggle">
-      <a href="?view={{ view }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter=major{% if q %}&q={{ q }}{% endif %}"
-         class="{{ 'active' if filt == 'major' }}">Major</a>
-      <a href="?view={{ view }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter=all{% if q %}&q={{ q }}{% endif %}"
-         class="{{ 'active' if filt == 'all' }}">All</a>
-    </div>
-  </div>
-  {% endif %}
-
-  {% if q %}
-  <div class="toolbar-group">
-    <span style="font-size:0.78rem;color:#888">Filtered: <strong>{{ q }}</strong></span>
-    <a href="?view={{ view }}{% if source_id %}&source_id={{ source_id }}{% endif %}&filter={{ filt }}"
-       style="font-size:0.75rem;color:#e74c3c;text-decoration:none">✕ clear</a>
-  </div>
-  {% endif %}
-
-  <div class="toolbar-right">
-    {% if view == "compare" %}{{ rows|length }} bank(s)
-    {% elif view == "bank" and bank_data %}{{ total_currencies }} currencies
-    {% elif view == "all" and matrix %}{{ matrix.currencies|length }} currencies × {{ matrix.banks|length }} banks
-    {% elif view == "history" %}{{ hist_by_date|length }} date(s) &middot; {{ currency }}
     {% endif %}
   </div>
 </div>
 
-<!-- ── main content ── -->
 <main>
-{% if error %}
-  <div class="error">⚠ {{ error }}</div>
+{% if error %}<div class="error">⚠ {{ error }}</div>{% endif %}
 
-{% elif view == "compare" %}
-<!-- ════════════════════════════════════════════════════════ COMPARE VIEW -->
+{% if view == 'compare' %}
+<!-- ══════════════════════════════════════════════ BEST RATES VIEW -->
 {% if not rows %}
-  <p class="empty">No trusted rates for {{ currency }}.</p>
+  <p class="empty">No {{ rate_type }} rates for {{ currency }}. Try a different rate type.</p>
 {% else %}
-<div class="card">
-  <div class="compare-header">
-    <span>#</span><span>Bank</span><span>Buying ↑</span><span>Selling</span><span>Date</span>
-  </div>
-  <ul class="rank-list">
-  {% for r in rows %}
-    {% set pct = ((r.buying_rate / max_buying * 100) | round(1)) if max_buying and r.buying_rate else 0 %}
-    {% set is_best = loop.index == 1 %}
-    <li class="rank-item {{ 'best' if is_best }}">
-      <span class="rank-pos {{ 'gold' if loop.index==1 else 'silver' if loop.index==2 else 'bronze' if loop.index==3 else '' }}">
-        {{ loop.index }}
-      </span>
-      <div class="rank-bank">
-        {{ r.bank_name }}
-        <small>
-          {{ r.category }}
-          {% if r.is_provisional %}<span class="badge provisional">PROVISIONAL</span>{% endif %}
-          {% if r.staleness_warning %}<span class="badge stale">STALE</span>{% endif %}
-        </small>
-        <div class="rank-bar-wrap" style="margin-top:0.3rem">
-          <div class="rank-bar" style="width:{{ pct }}%"></div>
+  {% set industry_avg_buy = rows[0].industry_avg_buying if rows else None %}
+  {% set industry_avg_sell = rows[0].industry_avg_selling if rows else None %}
+  {% set max_buying = rows | map(attribute='buying_rate') | select | max %}
+
+  <div class="card">
+    <!-- industry average bar -->
+    <div class="avg-bar">
+      <span>Industry Average ({{ rows|length }} banks):</span>
+      <div class="avg-item"><span class="avg-dot buy"></span> You receive: <strong>{{ '%.2f'|format(industry_avg_buy|float) }} ETB</strong></div>
+      <div class="avg-item"><span class="avg-dot sell"></span> You pay: <strong>{{ '%.2f'|format(industry_avg_sell|float) }} ETB</strong></div>
+      <span style="margin-left:auto;font-size:0.72rem;color:#bbb">per 1 {{ currency }}</span>
+    </div>
+
+    <div class="rank-header">
+      <span>#</span>
+      <span>Bank</span>
+      <span>You Receive</span>
+      <span>You Pay</span>
+      <span>Spread</span>
+      <span>Change</span>
+    </div>
+
+    <ul class="rank-list">
+    {% for r in rows %}
+      {% set pct = ((r.buying_rate / max_buying * 100) | round(1)) if max_buying and r.buying_rate else 0 %}
+      {% set is_best = loop.index == 1 %}
+      <li class="rank-item {{ 'rank-best' if is_best }}">
+        <span class="rank-pos {{ 'gold' if loop.index==1 else 'silver' if loop.index==2 else 'bronze' if loop.index==3 else '' }}">
+          {{ loop.index }}
+        </span>
+
+        <div class="rank-bank">
+          <div class="rank-bank-name">
+            {{ r.bank_name }}
+            {% if r.staleness_warning %}<span class="badge badge-stale">STALE</span>{% endif %}
+            {% if r.is_provisional %}<span class="badge badge-prov">UNVERIFIED</span>{% endif %}
+            {% if r.raw_excerpt is defined and r.raw_excerpt and r.raw_excerpt.get('fallback_source') == 'addis_fortune' %}
+              <span class="badge badge-af">AF</span>
+            {% endif %}
+          </div>
+          <div class="rank-bank-code">
+            {{ r.bank_code }} &middot; {{ r.effective_date.strftime('%d %b') if r.effective_date else '—' }}
+          </div>
+          <div class="rank-bar-wrap">
+            <div class="rank-bar" style="width:{{ pct }}%"></div>
+          </div>
         </div>
-      </div>
-      <span class="rank-buying">{{ r.buying_rate | round(4) }}</span>
-      <span class="rank-selling">{{ r.selling_rate | round(4) if r.selling_rate else '—' }}</span>
-      <span class="rank-meta">
-        {{ r.effective_date.strftime('%d %b') if r.effective_date else '—' }}
-      </span>
-    </li>
-  {% endfor %}
-  </ul>
-</div>
-<p class="summary">
-  {{ rows|length }} bank(s) offering {{ currency }}.
-  Ranked by best buying rate (you sell {{ currency }}, receive ETB).
-</p>
+
+        <div class="rank-receive">
+          <div class="rank-receive-val">{{ '%.2f'|format(r.buying_rate|float) }}</div>
+          <div class="rank-receive-label">ETB per {{ currency }}</div>
+        </div>
+
+        <div class="rank-pay">
+          <div class="rank-pay-val">{{ '%.2f'|format(r.selling_rate|float) if r.selling_rate else '—' }}</div>
+          <div class="rank-pay-label">ETB per {{ currency }}</div>
+        </div>
+
+        <div class="rank-spread">
+          {% if r.spread_pct is not none %}{{ r.spread_pct }}%{% else %}—{% endif %}
+          <small>spread</small>
+        </div>
+
+        <div class="rank-delta">
+          {% if r.delta_buying is not none %}
+            {% if r.delta_buying > 0.001 %}
+              <span class="delta-up">▲ {{ '%.2f'|format(r.delta_buying) }}</span>
+            {% elif r.delta_buying < -0.001 %}
+              <span class="delta-down">▼ {{ '%.2f'|format(r.delta_buying|abs) }}</span>
+            {% else %}
+              <span class="delta-flat">— 0.00</span>
+            {% endif %}
+          {% else %}
+            <span class="delta-flat">—</span>
+          {% endif %}
+          <small>vs prev day</small>
+        </div>
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+
+  <p class="summary">
+    {{ rows|length }} bank(s) offering {{ currency }} ({{ rate_type }}).
+    "You receive" = bank buys your {{ currency }}, pays ETB.
+    "You pay" = bank sells {{ currency }} to you, charges ETB.
+    <a href="/?view=history&currency={{ currency }}&rate_type={{ rate_type }}">View history →</a>
+  </p>
 {% endif %}
 
-{% elif view == "bank" %}
-<!-- ════════════════════════════════════════════════════════ BY-BANK VIEW -->
+
+{% elif view == 'bank' %}
+<!-- ══════════════════════════════════════════════ BY-BANK VIEW -->
 {% if not source_id %}
   <p class="empty">Select a bank from the toolbar above.</p>
 {% elif not bank_data or not bank_data.currencies %}
-  <p class="empty">No trusted rates for this bank{% if filt == 'major' %} in major currencies — <a href="?view=bank&source_id={{ source_id }}&filter=all">show all</a>{% endif %}.</p>
+  <p class="empty">No trusted rates for this bank{% if filt == 'major' %} in major currencies —
+    <a href="?view=bank&source_id={{ source_id }}&filter=all&rate_type={{ rate_type }}">show all</a>{% endif %}.</p>
 {% else %}
   {% set cats = bank_data.categories %}
   {% set cur_items = bank_data.currencies.items() | list %}
   {% set visible = cur_items if show_all else cur_items[:page_size] %}
 
   <div class="card">
-    <div class="bank-header">
-      <h2>{{ bank_data.bank_name }}</h2>
-      <div class="bank-meta">
-        <span>{{ total_currencies }} currencies</span>
-        {% if bank_data.latest_date %}
-          <span class="{{ 'stale' if bank_data.staleness_warning else 'fresh' }}">
-            Effective: {{ bank_data.latest_date.strftime('%d %b %Y') }}
-          </span>
-        {% endif %}
-        {% if bank_data.latest_fetch %}
-          <span>Fetched: {{ bank_data.latest_fetch.strftime('%d %b %H:%M') }} UTC</span>
-        {% endif %}
-        {% if bank_data.is_provisional %}
-          <span class="badge provisional">PROVISIONAL</span>
-        {% endif %}
+    <div class="bank-hero">
+      <div class="bank-hero-left">
+        <h2>{{ bank_data.bank_name }}</h2>
+        <div class="bank-meta">
+          <span>{{ total_currencies }} currencies</span>
+          {% if bank_data.latest_date %}
+            <span class="{{ 'stale' if bank_data.staleness_warning else 'fresh' }}">
+              {{ bank_data.latest_date.strftime('%d %b %Y') }}
+            </span>
+          {% endif %}
+          {% if bank_data.latest_fetch %}
+            <span>Fetched {{ bank_data.latest_fetch.strftime('%d %b %H:%M') }} UTC</span>
+          {% endif %}
+          {% if bank_data.is_provisional %}<span class="badge badge-prov">UNVERIFIED</span>{% endif %}
+        </div>
+      </div>
+      <div style="display:flex;gap:0.5rem;align-items:center">
+        <div class="filter-toggle">
+          <a href="?view=bank&source_id={{ source_id }}&filter=major&rate_type={{ rate_type }}" class="{{ 'active' if filt == 'major' }}">Major</a>
+          <a href="?view=bank&source_id={{ source_id }}&filter=all&rate_type={{ rate_type }}" class="{{ 'active' if filt == 'all' }}">All</a>
+        </div>
       </div>
     </div>
 
@@ -380,8 +443,23 @@
         <tr>
           <th>Currency</th>
           {% for cat in cats %}
-            <th>{{ cat }} Buy</th>
-            <th>{{ cat }} Sell</th>
+            {% if cat == 'transactional' %}
+              <th class="cat-header cat-divider" colspan="3">Transfer</th>
+            {% elif cat == 'cash' %}
+              <th class="cat-header cat-divider" colspan="3">Cash</th>
+            {% elif cat == 'weighted_average' %}
+              <th class="cat-header cat-divider" colspan="2">Reference</th>
+            {% else %}
+              <th class="cat-header cat-divider" colspan="2">{{ cat }}</th>
+            {% endif %}
+          {% endfor %}
+        </tr>
+        <tr>
+          <th></th>
+          {% for cat in cats %}
+            <th class="cat-divider">You Receive</th>
+            <th>You Pay</th>
+            {% if cat != 'weighted_average' %}<th>Spread</th>{% endif %}
           {% endfor %}
         </tr>
       </thead>
@@ -391,10 +469,19 @@
           <td>{{ cur }}</td>
           {% for cat in cats %}
             {% if cat in cat_data %}
-              <td class="buy">{{ cat_data[cat].buying | round(4) if cat_data[cat].buying else '—' }}</td>
-              <td class="sell">{{ cat_data[cat].selling | round(4) if cat_data[cat].selling else '—' }}</td>
+              {% set d = cat_data[cat] %}
+              <td class="buy cat-divider">{{ '%.2f'|format(d.buying|float) if d.buying else '—' }}</td>
+              <td class="sell">{{ '%.2f'|format(d.selling|float) if d.selling else '—' }}</td>
+              {% if cat != 'weighted_average' %}
+                <td class="spread-cell">
+                  {% if d.buying and d.selling and d.buying > 0 %}
+                    {{ '%.1f'|format(((d.selling|float - d.buying|float) / d.buying|float * 100)) }}%
+                  {% else %}—{% endif %}
+                </td>
+              {% endif %}
             {% else %}
-              <td class="na">—</td><td class="na">—</td>
+              <td class="na cat-divider">—</td><td class="na">—</td>
+              {% if cat != 'weighted_average' %}<td class="na">—</td>{% endif %}
             {% endif %}
           {% endfor %}
         </tr>
@@ -404,7 +491,7 @@
 
     {% if paginated %}
     <div class="show-all-wrap">
-      <a href="?view=bank&source_id={{ source_id }}&filter={{ filt }}&show_all=1">
+      <a href="?view=bank&source_id={{ source_id }}&filter={{ filt }}&rate_type={{ rate_type }}&show_all=1">
         Show all {{ total_currencies }} currencies ↓
       </a>
     </div>
@@ -412,14 +499,16 @@
   </div>
   <p class="summary">
     Showing {{ visible|length }} of {{ total_currencies }} currencies.
-    {% if filt == 'major' %}<a href="?view=bank&source_id={{ source_id }}&filter=all">Show all currencies</a>{% endif %}
+    {% if filt == 'major' %}<a href="?view=bank&source_id={{ source_id }}&filter=all&rate_type={{ rate_type }}">Show all currencies</a>{% endif %}
   </p>
 {% endif %}
 
-{% elif view == "all" %}
-<!-- ════════════════════════════════════════════════════════ ALL RATES MATRIX -->
+
+{% elif view == 'all' %}
+<!-- ══════════════════════════════════════════════ ALL CURRENCIES MATRIX -->
 {% if not matrix or not matrix.currencies %}
-  <p class="empty">No trusted rates available{% if filt == 'major' %} for major currencies — <a href="?view=all&filter=all">show all</a>{% endif %}.</p>
+  <p class="empty">No trusted rates{% if filt == 'major' %} for major currencies —
+    <a href="?view=all&filter=all&rate_type={{ rate_type }}">show all</a>{% endif %}.</p>
 {% else %}
 <div class="card matrix-wrap">
   <table class="matrix-table">
@@ -427,7 +516,11 @@
       <tr>
         <th>Currency</th>
         {% for bank in matrix.banks %}
-          <th>{{ bank.split()[0] }}</th>
+          <th title="{{ bank }}">
+            <a href="/?view=bank&source_id={{ matrix.bank_ids[bank] }}&rate_type={{ rate_type }}">
+              {{ matrix.bank_codes.get(bank, bank.split()[0][:6]) }}
+            </a>
+          </th>
         {% endfor %}
       </tr>
     </thead>
@@ -435,15 +528,14 @@
     {% for cur in matrix.currencies %}
       <tr>
         <td>
-          <a href="/?view=compare&currency={{ cur }}&filter={{ filt }}"
-             style="color:inherit;text-decoration:none">{{ cur }}</a>
+          <a href="/?view=compare&currency={{ cur }}&rate_type={{ rate_type }}">{{ cur }}</a>
         </td>
         {% for bank in matrix.banks %}
           {% set cell = matrix.matrix.get(cur, {}).get(bank) %}
           {% if cell and cell.buying %}
             {% set is_best = cell.buying == matrix.best_buying.get(cur) %}
-            <td class="{{ 'best-cell' if is_best }}">
-              {{ cell.buying | round(4) }}
+            <td class="{{ 'best-cell' if is_best }}" title="{{ bank }}: buy {{ cell.buying }} / sell {{ cell.selling }}">
+              {{ '%.2f'|format(cell.buying|float) }}
             </td>
           {% else %}
             <td class="na-cell">—</td>
@@ -455,14 +547,14 @@
   </table>
 </div>
 <p class="summary">
-  Buying rates only. Green = best rate for that currency.
-  Click a currency to compare all banks.
-  {% if filt == 'major' %}<a href="?view=all&filter=all">Show all {{ matrix.currencies|length }} currencies</a>{% endif %}
+  Transfer buying rates (you receive ETB). <span style="color:#16a34a;font-weight:700">Green</span> = best rate per currency.
+  Click currency → compare all banks. Click bank code → bank detail.
+  {% if filt == 'major' %}<a href="?view=all&filter=all&rate_type={{ rate_type }}">Show all currencies</a>{% endif %}
 </p>
 {% endif %}
 
-{% elif view == "history" %}
-<!-- ════════════════════════════════════════════════════════ HISTORY VIEW -->
+{% elif view == 'history' %}
+<!-- ══════════════════════════════════════════════ HISTORY VIEW -->
 {% if not hist_by_date %}
   <p class="empty">No historical data for {{ currency }}{% if sel_date %} on {{ sel_date.strftime('%d %b %Y') }}{% endif %}.</p>
 {% else %}
@@ -479,9 +571,10 @@
           <thead>
             <tr>
               <th>Bank</th>
-              <th>Category</th>
-              <th>Buying</th>
-              <th>Selling</th>
+              <th style="text-align:left">Type</th>
+              <th>You Receive</th>
+              <th>You Pay</th>
+              <th>Spread</th>
             </tr>
           </thead>
           <tbody>
@@ -489,9 +582,19 @@
             {% set is_best = r.buying_rate and r.buying_rate == best_buy.val %}
             <tr class="{{ 'best-row' if is_best }}">
               <td>{{ r.bank_name }}{% if is_best %} ★{% endif %}</td>
-              <td style="text-align:left;color:#999;font-size:0.78rem">{{ r.category or '—' }}</td>
-              <td class="buy">{{ r.buying_rate | round(4) if r.buying_rate else '—' }}</td>
-              <td class="sell">{{ r.selling_rate | round(4) if r.selling_rate else '—' }}</td>
+              <td style="text-align:left">
+                {% if r.category == 'transactional' %}<span class="cat-pill cat-transfer">Transfer</span>
+                {% elif r.category == 'cash' %}<span class="cat-pill cat-cash">Cash</span>
+                {% elif r.category == 'weighted_average' %}<span class="cat-pill cat-reference">Reference</span>
+                {% else %}<span class="cat-pill cat-unknown">{{ r.category or '—' }}</span>{% endif %}
+              </td>
+              <td class="buy">{{ '%.2f'|format(r.buying_rate|float) if r.buying_rate else '—' }}</td>
+              <td class="sell">{{ '%.2f'|format(r.selling_rate|float) if r.selling_rate else '—' }}</td>
+              <td style="color:#aaa;font-size:0.78rem">
+                {% if r.buying_rate and r.selling_rate and r.buying_rate > 0 %}
+                  {{ '%.1f'|format(((r.selling_rate|float - r.buying_rate|float) / r.buying_rate|float * 100)) }}%
+                {% else %}—{% endif %}
+              </td>
             </tr>
           {% endfor %}
           </tbody>
@@ -500,13 +603,12 @@
     </div>
   {% endfor %}
   <p class="summary">
-    {{ currency }} historical rates. ★ = best buying rate for that date.
-    {% if sel_date %}<a href="?view=history&currency={{ currency }}">Show all dates</a>{% endif %}
+    {{ currency }} rates. ★ = best buying rate for that date.
+    {% if sel_date %}<a href="?view=history&currency={{ currency }}&rate_type={{ rate_type }}">Show all dates</a>{% endif %}
   </p>
 {% endif %}
 
 {% endif %}
 </main>
-
 </body>
 </html>

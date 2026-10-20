@@ -54,10 +54,17 @@ def ingest(conn, records: list, source_id: int, run_id: int,
     result = IngestResult()
 
     for record in records:
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT _ingest_sp")
         try:
             _process_one(conn, record, source_id, run_id, fetched_at,
                          category_map, result)
+            with conn.cursor() as cur:
+                cur.execute("RELEASE SAVEPOINT _ingest_sp")
         except Exception as exc:
+            with conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT _ingest_sp")
+                cur.execute("RELEASE SAVEPOINT _ingest_sp")
             result.errors.append((record.source_currency_code, str(exc)))
             result.rejected += 1
 

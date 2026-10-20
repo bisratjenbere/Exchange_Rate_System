@@ -260,6 +260,83 @@ def review_decide():
     return __import__('flask').redirect("/review")
 
 
+# ── USD Matrix ───────────────────────────────────────────────────────────────
+
+@app.get("/usd")
+def usd_matrix():
+    # Only Transfer (transactional) and Cash are user-actionable.
+    # weighted_average is a bank-internal benchmark — excluded from this view.
+    category = request.args.get("category", "transactional")
+    if category not in ("transactional", "cash"):
+        category = "transactional"
+    conn = None
+    try:
+        conn = _conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (rs.id, o.effective_date)
+                    b.name AS bank_name,
+                    b.code AS bank_code,
+                    o.effective_date,
+                    o.buying_rate,
+                    o.selling_rate
+                FROM rate_observation o
+                JOIN rate_source rs ON rs.id = o.source_id
+                JOIN bank b ON b.id = rs.bank_id
+                JOIN rate_category rc ON rc.id = o.category_id
+                WHERE o.validation_status != 'rejected'
+                  AND o.identity_status != 'ambiguous'
+                  AND o.category_id IS NOT NULL
+                  AND rs.is_enabled = TRUE
+                  AND o.source_currency_code = 'USD'
+                  AND rc.code = %s
+                  AND o.effective_date IS NOT NULL
+                  AND o.effective_date >= CURRENT_DATE - 30
+                ORDER BY rs.id, o.effective_date DESC, o.buying_rate DESC NULLS LAST
+            """, (category,))
+            rows = cur.fetchall()
+    except Exception as exc:
+        logger.error("GET /usd failed: %s", exc)
+        rows = []
+    finally:
+        if conn:
+            _put(conn)
+
+    # Build matrix: {date: {bank_code: {buying, selling, bank_name}}}
+    matrix = {}
+    banks_set = {}  # code -> name
+    for bank_name, bank_code, eff_date, buying, selling in rows:
+        if eff_date is None:
+            continue
+        banks_set[bank_code] = bank_name
+        matrix.setdefault(eff_date, {})[bank_code] = {
+            "buying": buying,
+            "selling": selling,
+        }
+
+    dates = sorted(matrix.keys(), reverse=True)
+    # Sort banks by code alphabetically
+    banks = sorted(banks_set.keys())
+
+    # Best buying rate per date (for highlighting)
+    best_buying_per_date = {}
+    for d in dates:
+        vals = [matrix[d][b]["buying"] for b in matrix[d] if matrix[d][b]["buying"] is not None]
+        if vals:
+            best_buying_per_date[d] = max(vals)
+
+    return render_template(
+        "usd_matrix.html",
+        category=category,
+        dates=dates,
+        banks=banks,
+        bank_names=banks_set,
+        matrix=matrix,
+        best_buying_per_date=best_buying_per_date,
+        now=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+
 # ── UI ─────────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -271,6 +348,10 @@ def ui():
     q         = request.args.get("q", "").strip().upper()
     show_all  = request.args.get("show_all", "0") == "1"
     date_str  = request.args.get("date", "").strip()
+    # weighted_average is a bank-internal benchmark, not user-actionable
+    rate_type = request.args.get("rate_type", "transactional")
+    if rate_type not in ("transactional", "cash"):
+        rate_type = "transactional"
     error     = None
 
     # parse date param
@@ -283,12 +364,6 @@ def ui():
 
     major_only = (filt == "major")
 
-    # resolve search query → redirect intent
-    search_redirect = None
-    if q:
-        # will be resolved in template via datalist; pass through as-is
-        search_redirect = q
-
     conn = None
     try:
         conn = _conn()
@@ -300,7 +375,7 @@ def ui():
         if view == "compare":
             if q and q in currencies:
                 currency = q
-            rows        = get_best_rates_by_currency(conn, currency)
+            rows        = get_best_rates_by_currency(conn, currency, category=rate_type)
             bank_data   = None
             matrix      = None
             hist_rows   = []
@@ -362,6 +437,8 @@ def ui():
         if d is None:
             continue
         hist_by_date.setdefault(d, []).append(r)
+    for d in hist_by_date:
+        hist_by_date[d].sort(key=lambda r: r["buying_rate"] or 0, reverse=True)
 
     return render_template(
         "index.html",
@@ -385,6 +462,13 @@ def ui():
         paginated=paginated,
         total_currencies=total_currencies,
         error=error,
+        rate_type=rate_type,
         now=datetime.datetime.now(datetime.timezone.utc),
         major_currencies=MAJOR_CURRENCIES,
     )
+
+
+if __name__ == "__main__":
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
+    app.run(host="0.0.0.0", port=port, debug=False)

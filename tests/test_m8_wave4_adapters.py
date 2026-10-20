@@ -82,9 +82,6 @@ def test_dbe_schema_fingerprint_deterministic():
     assert dbe_fp(raw) == dbe_fp(raw)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SIINQEE (Type F single table, UNKNOWN)
-# ═══════════════════════════════════════════════════════════════════════════════
 
 from adapters.siinqee.adapter import parse as siinqee_parse, schema_fingerprint as siinqee_fp, ADAPTER_KEY as SIINQEE_KEY
 
