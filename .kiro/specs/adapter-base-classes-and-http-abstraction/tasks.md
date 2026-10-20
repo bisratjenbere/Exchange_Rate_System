@@ -184,7 +184,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Ensure existing code calling parse(raw_html, category="UNKNOWN") continues to work
   - _Requirements: 11.5, 12.1, 12.2_
 
-- [ ]* 7.3 Verify Ahadu adapter backward compatibility and test equivalence
+- [x]* 7.3 Verify Ahadu adapter backward compatibility and test equivalence
   - Run all existing Ahadu tests without modification
   - Verify all tests pass
   - Create equivalence test comparing old function output to new class output for identical inputs
@@ -202,7 +202,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
 
 ### Task 9: Phase 1 Checkpoint - Verify All Tests Pass
 
-- [ ] 9.1 Run complete test suite and verify 429 tests pass
+- [x] 9.1 Run complete test suite and verify 429 tests pass
   - Run pytest tests/ -v and confirm all 429 existing tests pass
   - Run new unit tests for base classes (tests/test_adapter_bases.py)
   - Run new unit tests for HTTP clients (tests/test_http_client.py)
@@ -217,7 +217,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
 
 ### Task 10: Refactor Batch 1 - JSON Adapters (Days 1-2)
 
-- [ ] 10.1 Refactor Rammis adapter (adapters/rammis/adapter.py)
+- [x] 10.1 Refactor Rammis adapter (adapters/rammis/adapter.py)
   - Create RammisAdapter class inheriting from JSONAdapter
   - Implement _process_data() method with Rammis-specific extraction logic
   - Implement get_source_url(), get_adapter_key() methods
@@ -225,7 +225,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Verify existing tests pass
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.6, 12.1, 12.3_
 
-- [ ] 10.2 Refactor ADIB adapter (adapters/adib/adapter.py)
+- [x] 10.2 Refactor ADIB adapter (adapters/adib/adapter.py)
   - Create ADIBAdapter class inheriting from JSONAdapter
   - Implement _process_data() method with ADIB-specific extraction logic
   - Implement get_source_url(), get_adapter_key() methods
@@ -233,14 +233,14 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Verify existing tests pass
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.6, 12.1, 12.3_
 
-- [ ]* 10.3 Verify Batch 1 tests pass
+- [x]* 10.3 Verify Batch 1 tests pass
   - Run tests for Rammis and ADIB adapters
   - Verify no regressions introduced
   - _Requirements: 12.4_
 
 ### Task 11: Refactor Batch 2 - HTML Table Adapters Group A (Days 3-4)
 
-- [ ] 11.1 Refactor Dashen adapter (adapters/dashen/adapter.py)
+- [x] 11.1 Refactor Dashen adapter (adapters/dashen/adapter.py)
   - Create DashenAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables() method with Dashen-specific table parsing logic
   - Implement get_source_url(), get_adapter_key() methods
@@ -249,7 +249,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 11.2 Refactor NIB adapter (adapters/nib/adapter.py)
+- [x] 11.2 Refactor NIB adapter (adapters/nib/adapter.py)
   - Create NIBAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Override requires_category() if needed
@@ -257,7 +257,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 11.3 Refactor Abay adapter (adapters/abay/adapter.py)
+- [x] 11.3 Refactor Abay adapter (adapters/abay/adapter.py)
   - Create AbayAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
@@ -271,70 +271,70 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 11.5 Refactor Awash adapter (adapters/awash/adapter.py)
+- [x] 11.5 Refactor Awash adapter (adapters/awash/adapter.py)
   - Create AwashAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ]* 11.6 Verify Batch 2 tests pass
+- [x]* 11.6 Verify Batch 2 tests pass
   - Run tests for all Batch 2 adapters (Dashen, NIB, Abay, Amhara, Awash)
   - Verify no regressions introduced
   - _Requirements: 12.4_
 
 ### Task 12: Refactor Batch 3 - HTML Table Adapters Group B (Days 5-6)
 
-- [ ] 12.1 Refactor Berhan adapter (adapters/berhan/adapter.py)
+- [x] 12.1 Refactor Berhan adapter (adapters/berhan/adapter.py)
   - Create BerhanAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 12.2 Refactor BOA adapter (adapters/boa/adapter.py)
+- [x] 12.2 Refactor BOA adapter (adapters/boa/adapter.py)
   - Create BOAAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 12.3 Refactor Bunna adapter (adapters/bunna/adapter.py)
+- [x] 12.3 Refactor Bunna adapter (adapters/bunna/adapter.py)
   - Create BunnaAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 12.4 Refactor CBO adapter (adapters/cbo/adapter.py)
+- [x] 12.4 Refactor CBO adapter (adapters/cbo/adapter.py)
   - Create CBOAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 12.5 Refactor Enat adapter (adapters/enat/adapter.py)
+- [x] 12.5 Refactor Enat adapter (adapters/enat/adapter.py)
   - Create EnatAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ]* 12.6 Verify Batch 3 tests pass
+- [x]* 12.6 Verify Batch 3 tests pass
   - Run tests for all Batch 3 adapters (Berhan, BOA, Bunna, CBO, Enat)
   - Verify no regressions introduced
   - _Requirements: 12.4_
 
 ### Task 13: Refactor Batch 4 - HTML Table Adapters Group C (Days 7-8)
 
-- [ ] 13.1 Refactor Gadaa adapter (adapters/gadaa/adapter.py)
+- [x] 13.1 Refactor Gadaa adapter (adapters/gadaa/adapter.py)
   - Create GadaaAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
   - Verify existing tests pass
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.6, 12.1, 12.3_
 
-- [ ] 13.2 Refactor Global adapter (adapters/global_/adapter.py)
+- [x] 13.2 Refactor Global adapter (adapters/global_/adapter.py)
   - Create GlobalAdapter class inheriting from HTMLTableAdapter
   - Implement _process_tables(), get_source_url(), get_adapter_key() methods
   - Add backward compatibility wrapper
@@ -490,7 +490,7 @@ This implementation refactors the Ethiopian Bank Exchange Rate system's 31 adapt
   - Document when to use each base class (JSONAdapter for JSON APIs, HTMLTableAdapter for HTML tables, HTMLTextAdapter for text extraction)
   - _Requirements: 14.5_
 
-- [ ] 17.3 Document HTTP client abstraction usage
+- [x] 17.3 Document HTTP client abstraction usage
   - Add section to developer guide explaining HttpClient interface
   - Document RequestsHttpClient for production (with retry configuration)
   - Document MockHttpClient for testing (with pattern matching)

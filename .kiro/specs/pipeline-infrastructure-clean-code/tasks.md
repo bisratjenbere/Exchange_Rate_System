@@ -102,7 +102,7 @@ This implementation applies SOLID principles, design patterns, and clean code pr
 - [ ] 5. Checkpoint - Verify infrastructure components
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Refactor scheduler/runner.py to use Scheduler class
+- [x] 6. Refactor scheduler/runner.py to use Scheduler class
   - Import all infrastructure components (Config, AdapterRegistry, RateSourceRepository, ErrorClassifier)
   - Import HttpClient from adapters.http.client (RequestsHttpClient, MockHttpClient)
   - Create Scheduler class with dependency injection constructor
@@ -121,7 +121,7 @@ This implementation applies SOLID principles, design patterns, and clean code pr
   - Remove all hardcoded constants (USER_AGENT, REQUEST_TIMEOUT, RATE_LIMIT_DELAY, MAX_RETRIES)
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9, 8.10, 4.9, 4.10_
 
-- [ ] 7. Add backward compatibility wrappers
+- [x] 7. Add backward compatibility wrappers
   - Keep module-level `run_source(conn, source_id)` function
   - Implement as wrapper: `return Scheduler().run_source(conn, source_id)`
   - Keep module-level `run_all(conn)` function
@@ -153,7 +153,7 @@ This implementation applies SOLID principles, design patterns, and clean code pr
   - Verify return value structure unchanged
   - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-- [ ] 8. Checkpoint - Verify all 429 existing tests pass
+- [x] 8. Checkpoint - Verify all 429 existing tests pass
   - Run complete test suite: `pytest tests/ -v`
   - Verify 429/429 tests pass without modification
   - Ensure all tests pass, ask the user if questions arise.
