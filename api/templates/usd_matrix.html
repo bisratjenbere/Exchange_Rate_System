@@ -126,7 +126,7 @@
     <thead>
       <!-- Row 1: Bank codes spanning 2 columns each -->
       <tr class="bank-header">
-        <th class="date-col">Date</th>
+        <th class="date-col">Collection Date</th>
         {% for code in banks %}
           <th colspan="2" title="{{ bank_names[code] }}" class="{{ 'bank-end' if loop.last else '' }}">{{ code }}</th>
         {% endfor %}

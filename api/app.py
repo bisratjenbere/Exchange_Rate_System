@@ -127,6 +127,25 @@ def health():
             _put(conn)
 
 
+@app.get("/metrics")
+def metrics():
+    """
+    Prometheus metrics endpoint.
+    
+    Exports collection metrics in Prometheus format for scraping.
+    """
+    try:
+        from infrastructure.metrics import get_metrics_text
+        metrics_output = get_metrics_text()
+        return app.response_class(
+            metrics_output,
+            mimetype='text/plain; version=0.0.4'
+        )
+    except Exception as exc:
+        logger.error("Metrics export failed: %s", exc)
+        return "# Metrics unavailable\n", 500
+
+
 @app.get("/banks")
 def banks():
     conn = None
@@ -274,10 +293,10 @@ def usd_matrix():
         conn = _conn()
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT ON (rs.id, o.effective_date)
+                SELECT DISTINCT ON (rs.id, o.fetched_at::date)
                     b.name AS bank_name,
                     b.code AS bank_code,
-                    o.effective_date,
+                    o.fetched_at::date AS effective_date,
                     o.buying_rate,
                     o.selling_rate
                 FROM rate_observation o
@@ -290,9 +309,8 @@ def usd_matrix():
                   AND rs.is_enabled = TRUE
                   AND o.source_currency_code = 'USD'
                   AND rc.code = %s
-                  AND o.effective_date IS NOT NULL
-                  AND o.effective_date >= CURRENT_DATE - 30
-                ORDER BY rs.id, o.effective_date DESC, o.buying_rate DESC NULLS LAST
+                  AND o.fetched_at::date >= CURRENT_DATE - 30
+                ORDER BY rs.id, o.fetched_at::date DESC, o.buying_rate DESC NULLS LAST
             """, (category,))
             rows = cur.fetchall()
     except Exception as exc:
