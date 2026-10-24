@@ -7,23 +7,26 @@ Parse rules:
 - Table 1: Currency (name) | Code | Buying | Selling → weighted_average.
 - "No Trade" → None.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import datetime, date
-from decimal import Decimal
 from typing import Optional
 from bs4 import BeautifulSoup
 
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
 from adapters.base import HTMLTableAdapter, ParseResult
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "tsehay_html"
 SOURCE_URL = "https://tsehaybank.com.et/exchange-rate/"
 
 
-class TsehayAdapter(HTMLTableAdapter):
-    """Tsehay Bank adapter - 2 tables (cash/transactional + weighted_average)."""
+class TsehayAdapter(FieldStructureMixin, HTMLTableAdapter):
+    """Tsehay Bank adapter with field detection - 2 tables (cash/transactional + weighted_average)."""
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -44,7 +47,7 @@ class TsehayAdapter(HTMLTableAdapter):
             return result
         
         try:
-            records = _parse_cash_txn(tables[0], effective_date, date_basis)
+            records = self._parse_cash_txn(tables[0], effective_date, date_basis)
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0_cash_txn:{exc}")
@@ -53,12 +56,81 @@ class TsehayAdapter(HTMLTableAdapter):
             result.add_error("table_1_weighted:missing")
         else:
             try:
-                records = _parse_weighted(tables[1], effective_date, date_basis)
+                records = self._parse_weighted(tables[1], effective_date, date_basis)
                 result.records.extend(records)
             except Exception as exc:
                 result.add_error(f"table_1_weighted:{exc}")
         
         return result
+    
+    def _parse_cash_txn(self, table, effective_date, date_basis) -> list:
+        """Parse table 0 with cash and transactional columns using field detection."""
+        rows = table.find_all("tr")
+        data_rows = [r for r in rows if r.find("td")]
+        records = []
+        for row in data_rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 5:
+                continue
+            currency_code = cells[0].strip()
+            if not currency_code:
+                continue
+            
+            # Create dict with explicit category prefixes
+            row_dict = {
+                "cash_buying": cells[1],
+                "cash_selling": cells[2],
+                "transactional_buying": cells[3],
+                "transactional_selling": cells[4],
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
+                effective_date=effective_date,
+                effective_date_basis=date_basis
+            )
+            
+            records.extend(detected_records)
+        return records
+    
+    def _parse_weighted(self, table, effective_date, date_basis) -> list:
+        """Parse table 1 with weighted_average columns using field detection."""
+        rows = [r for r in table.find_all("tr") if r.find("td")]
+        records = []
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 4:
+                continue
+            currency_name = cells[0].strip()
+            currency_code = cells[1].strip()
+            if not currency_code:
+                continue
+            
+            # Create dict with generic field names
+            row_dict = {
+                "buying": cells[2],
+                "selling": cells[3],
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
+                currency_name=currency_name or None,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=[] if effective_date else ["date_ambiguous:no_source_published_date"]
+            )
+            
+            # Context-based category override: this table is weighted_average
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category("weighted_average")
+            
+            records.extend(detected_records)
+        return records
 
 
 def _parse_date(soup) -> Optional[date]:
@@ -72,76 +144,6 @@ def _parse_date(soup) -> Optional[date]:
             except ValueError:
                 continue
     return None
-
-
-def _parse_cash_txn(table, effective_date, date_basis) -> list:
-    """Parse table 0 with cash and transactional columns."""
-    rows = table.find_all("tr")
-    # Skip header rows (rows without <td>)
-    data_rows = [r for r in rows if r.find("td")]
-    records = []
-    for row in data_rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 5:
-            continue
-        currency_code = cells[0].strip()
-        if not currency_code:
-            continue
-        for category, bi, si in [("cash", 1, 2), ("transactional", 3, 4)]:
-            buying = _safe_rate(cells[bi])
-            selling = _safe_rate(cells[si])
-            if buying is None and selling is None:
-                continue
-            records.append(_make_record(currency_code, None, category, buying, selling, cells[bi], cells[si], effective_date, date_basis))
-    return records
-
-
-def _parse_weighted(table, effective_date, date_basis) -> list:
-    """Parse table 1 with weighted_average columns."""
-    rows = [r for r in table.find_all("tr") if r.find("td")]
-    records = []
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 4:
-            continue
-        currency_name = cells[0].strip()
-        currency_code = cells[1].strip()
-        if not currency_code:
-            continue
-        buying = _safe_rate(cells[2])
-        selling = _safe_rate(cells[3])
-        if buying is None and selling is None:
-            continue
-        records.append(_make_record(currency_code, currency_name or None, "weighted_average",
-                                    buying, selling, cells[2], cells[3], effective_date, date_basis))
-    return records
-
-
-def _make_record(code, name, category, buying, selling, buy_text, sell_text, effective_date, date_basis):
-    """Create AdapterRecord from extracted data."""
-    return AdapterRecord(
-        source_currency_code=code,
-        currency_name=name,
-        category=category,
-        buying_rate=buying,
-        selling_rate=selling,
-        source_rate_text=f"{buy_text}/{sell_text}",
-        effective_date=effective_date,
-        effective_date_basis=date_basis,
-        source_record_key=None,
-        source_publication_key=str(effective_date) if effective_date else None,
-        unit_multiplier=1,
-        raw_excerpt={"currency": code, "buying": buy_text, "selling": sell_text},
-        mapping_notes=[] if effective_date else ["date_ambiguous:no_source_published_date"],
-    )
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Convert raw rate string to Decimal, returning None on failure."""
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
 
 
 # ============================================================================

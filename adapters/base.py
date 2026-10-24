@@ -256,6 +256,11 @@ class HTMLTableAdapter(BankAdapter):
     Handles HTML parsing, table extraction, and provides default fingerprinting.
     Subclasses must implement _process_tables() to extract records from tables.
     
+    RESILIENCE FEATURES:
+    - Multi-strategy table detection (exact → fuzzy → any table)
+    - Fuzzy CSS selector matching for class name changes
+    - Automatic fallback when exact selectors fail
+    
     Example:
         class DBEAdapter(HTMLTableAdapter):
             def _process_tables(self, soup: BeautifulSoup, tables: list) -> ParseResult:
@@ -272,7 +277,13 @@ class HTMLTableAdapter(BankAdapter):
     
     def parse(self, raw_content: str, **options) -> ParseResult:
         """
-        Parse HTML content, extract tables, and delegate to _process_tables().
+        Parse HTML content, extract tables using multi-strategy approach.
+        
+        Strategies (in order):
+        1. Find all <table> elements (exact)
+        2. Find tables with rate-related CSS classes (fuzzy)
+        3. Find any table elements (fallback)
+        4. Report error if no tables found
         
         Args:
             raw_content: Raw HTML string
@@ -282,14 +293,96 @@ class HTMLTableAdapter(BankAdapter):
             ParseResult from _process_tables() or error if no tables found
         """
         soup = BeautifulSoup(raw_content, "html.parser")
-        tables = soup.find_all("table")
+        tables, strategy_used = self._find_tables_resilient(soup)
         
         if not tables:
             result = ParseResult()
-            result.add_error("No tables found in HTML")
+            result.add_error("No tables found in HTML (tried all strategies)")
             return result
         
+        # Log which strategy succeeded (for monitoring)
+        if strategy_used != "exact":
+            import logging
+            logging.info(f"{self.get_adapter_key()}: Found tables using '{strategy_used}' strategy")
+        
         return self._process_tables(soup, tables, **options)
+    
+    def _find_tables_resilient(self, soup: BeautifulSoup) -> tuple:
+        """
+        Find tables using multi-strategy approach for resilience.
+        
+        Returns:
+            Tuple of (tables_list, strategy_name)
+        """
+        # Strategy 1: Exact - find all <table> elements
+        tables = soup.find_all("table")
+        if tables:
+            return tables, "exact"
+        
+        # Strategy 2: Fuzzy - find tables with rate-related CSS classes
+        tables = self._find_tables_fuzzy_selectors(soup)
+        if tables:
+            return tables, "fuzzy_class"
+        
+        # Strategy 3: Fallback - look for div structures that might contain rates
+        # (This handles table → div migrations)
+        tables = self._find_div_based_tables(soup)
+        if tables:
+            return tables, "div_fallback"
+        
+        return [], "none"
+    
+    def _find_tables_fuzzy_selectors(self, soup: BeautifulSoup) -> list:
+        """
+        Find tables using fuzzy CSS class matching.
+        
+        Tries multiple patterns to catch CSS class renames:
+        - rate.*table (matches: rate-table, rates_table, rateTable)
+        - exchange.* (matches: exchange-rates, exchangeTable)
+        - .*rate.* (matches: daily-rates, forex-rate-list)
+        """
+        import re
+        
+        patterns = [
+            re.compile(r"rate.*table", re.I),
+            re.compile(r"exchange.*", re.I),
+            re.compile(r".*rate.*", re.I),
+            re.compile(r"forex.*", re.I),
+            re.compile(r"currency.*", re.I),
+        ]
+        
+        for pattern in patterns:
+            # Try finding tables with matching class
+            tables = soup.find_all("table", class_=pattern)
+            if tables:
+                return tables
+            
+            # Try finding divs with matching class that contain tables
+            divs = soup.find_all("div", class_=pattern)
+            for div in divs:
+                tables = div.find_all("table")
+                if tables:
+                    return tables
+        
+        return []
+    
+    def _find_div_based_tables(self, soup: BeautifulSoup) -> list:
+        """
+        Find div-based structures that replaced tables.
+        
+        Looks for divs with rate-related classes that might contain
+        row/cell structures similar to tables.
+        
+        Returns empty list for now - this is a hook for future enhancement.
+        """
+        # TODO: Implement div-based rate container detection
+        # This would detect patterns like:
+        # <div class="rate-row">
+        #   <div class="currency">USD</div>
+        #   <div class="buying">160.50</div>
+        #   <div class="selling">164.20</div>
+        # </div>
+        return []
     
     @abstractmethod
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:

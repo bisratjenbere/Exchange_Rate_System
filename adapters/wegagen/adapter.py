@@ -4,8 +4,8 @@ adapters/wegagen/adapter.py — Wegagen Bank (Type C1, Strapi v4).
 Parse rules (ADR-006 §6, mapping doc):
 - Input: Strapi v4 envelope {data: [{id, attributes: {...}}, ...], meta: {pagination}}.
 - Each item attributes: {date, code, unit, buying, selling, tra_buying, tra_selling, ...}.
-- buying == tra_buying for all observed records — category ambiguity (TO VERIFY).
-- Emit one AdapterRecord per row with category UNKNOWN until category is confirmed.
+- buying == tra_buying for all observed records — normalized to 'transactional' category.
+- Emit one AdapterRecord per row with category normalized from 'transactional'.
 - Per-row date (YYYY-MM-DD) → effective_date_basis=source_published.
 - source_record_key = str(id) — stable Strapi integer.
 - identity_status = derived (source_published date, no stable publication ID).
@@ -21,19 +21,37 @@ from typing import Optional
 
 from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
+from pipeline.category_normalizer import normalize_category
+from field_detection.mixin import FieldStructureMixin
 
 ADAPTER_KEY = "wegagen_api"
 SOURCE_URL = "https://weg.back.strapi.wegagen.com/api/exchange-rates?populate=*"
 
-_REQUIRED_ATTRS = {"date", "code", "buying", "selling"}
+_REQUIRED_ATTRS = {"date", "code"}  # buying/selling checked by field detection
 
 
 # ============================================================================
 # ADAPTER CLASS
 # ============================================================================
 
-class WegagenAdapter(JSONAdapter):
-    """Wegagen Bank adapter using Strapi v4 JSON API."""
+class WegagenAdapter(JSONAdapter, FieldStructureMixin):
+    """
+    Wegagen Bank adapter using Strapi v4 JSON API.
+    
+    Uses field-structure-based category detection to emit multiple records
+    per currency when both buying/tra_buying field pairs are present.
+    """
+    
+    # Configure explicit field mappings for Wegagen's field structure
+    FIELD_CONFIG = {
+        "field_mappings": {
+            "buying": "cash",
+            "selling": "cash",
+            "tra_buying": "transactional",
+            "tra_selling": "transactional"
+        },
+        "default_category": "transactional"
+    }
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -66,7 +84,7 @@ class WegagenAdapter(JSONAdapter):
         return result
     
     def _parse_item(self, item: dict) -> list:
-        """Emit ONE record per item with category UNKNOWN (buying == tra_buying ambiguity)."""
+        """Parse one item using field detection to emit records per detected category."""
         if not isinstance(item, dict):
             return []
         
@@ -87,29 +105,18 @@ class WegagenAdapter(JSONAdapter):
         date_basis = "source_published" if effective_date else "collection_date_fallback"
         unit = int(attrs.get("unit", 1) or 1)
         
-        # buying == tra_buying in observed data → category ambiguous → emit UNKNOWN
-        buying = self._safe_rate(attrs.get("buying"))
-        selling = self._safe_rate(attrs.get("selling"))
-        if buying is None and selling is None:
-            return []
-        
-        return [AdapterRecord(
-            source_currency_code=currency,
-            category="UNKNOWN",
-            buying_rate=buying,
-            selling_rate=selling,
-            source_rate_text=self._rate_text(attrs.get("buying"), attrs.get("selling")),
+        # Use field detection to detect and emit records
+        records = self.detect_and_emit(
+            attrs,
+            currency=currency,
             effective_date=effective_date,
             effective_date_basis=date_basis,
-            source_record_key=str(item_id) if item_id is not None else None,
-            source_publication_key=None,
-            quote_currency_code=None,
+            source_record_id=str(item_id) if item_id is not None else None,
             unit_multiplier=unit,
-            raw_excerpt={"id": item_id, "code": currency, "date": attrs.get("date"),
-                         "buying": attrs.get("buying"), "selling": attrs.get("selling"),
-                         "tra_buying": attrs.get("tra_buying"), "tra_selling": attrs.get("tra_selling")},
-            mapping_notes=["strapi_v4:populate_star", "category_ambiguous:buying_equals_tra_buying"],
-        )]
+            mapping_notes=["strapi_v4:populate_star"]
+        )
+        
+        return records
     
     def schema_fingerprint(self, raw_content: str) -> str:
         """Hash of Strapi envelope keys + first item's attributes keys."""

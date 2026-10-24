@@ -17,25 +17,26 @@ Response: {"success":true,"data":{"rates":{
 }}}
 
 Parse rules:
-- buying/selling → transactional category
-- transaction_buying/transaction_selling → also transactional (same values, skip duplicate)
+- buying/selling → transactional category (generic fields)
+- transaction_buying/transaction_selling → also transactional (duplicates, auto-filtered)
 - weighted_buying_average / weighted_selling_average → weighted_average category
 - Date from top-level data.date field (YYYY-MM-DD) → source_published
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to use FieldStructureMixin for automatic category detection.
+Empty config auto-detects all field pairs and assigns categories based on field names.
 """
 import hashlib
 import json
 import re
 import time
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 import requests
 
 from adapters.base import JSONAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
 
 ADAPTER_KEY = "awash_ajax"
 SOURCE_URL = "https://awashbank.com/wp-admin/admin-ajax.php"
@@ -43,13 +44,21 @@ _HOME_URL = "https://awashbank.com/"
 _AJAX_URL = "https://awashbank.com/wp-admin/admin-ajax.php"
 
 
-class AwashAdapter(JSONAdapter):
+class AwashAdapter(FieldStructureMixin, JSONAdapter):
     """
-    Awash Bank adapter using JSONAdapter base class.
+    Awash Bank adapter using JSONAdapter base class with field detection.
     
     Parses JSON response from WordPress AJAX endpoint.
-    Emits 0-2 records per currency (transactional + weighted_average).
+    Uses field detection to automatically discover and categorize rate pairs.
+    
+    Field Structure: Auto-detected from field names
+    - buying/selling → UNKNOWN (filtered as duplicate of transaction_buying/selling)
+    - transaction_buying/transaction_selling → transactional
+    - weighted_buying_average/weighted_selling_average → weighted_average
     """
+    
+    # Empty config - field detection will find all pairs automatically
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Awash AJAX endpoint URL."""
@@ -61,7 +70,7 @@ class AwashAdapter(JSONAdapter):
     
     def _process_data(self, data, **options) -> ParseResult:
         """
-        Extract AdapterRecords from parsed JSON data.
+        Extract AdapterRecords from parsed JSON data using field detection.
         
         Args:
             data: Parsed JSON (should be WordPress AJAX response)
@@ -89,8 +98,30 @@ class AwashAdapter(JSONAdapter):
             if not isinstance(rate_data, dict):
                 continue
             try:
-                records = _parse_currency(currency, rate_data, effective_date, date_basis)
-                result.records.extend(records)
+                # Use field detection to automatically discover and emit records
+                detected_records = self.detect_and_emit(
+                    data=rate_data,
+                    currency=currency,
+                    effective_date=effective_date,
+                    effective_date_basis=date_basis,
+                    source_record_id=None,
+                    source_publication_id=str(effective_date) if effective_date else None
+                )
+                
+                # Filter out UNKNOWN category (generic buying/selling are duplicates)
+                # Keep only transactional and weighted_average
+                filtered_records = [
+                    rec for rec in detected_records
+                    if rec.category != 'UNKNOWN'
+                ]
+                
+                result.records.extend(filtered_records)
+                
+                # Add warning if we filtered any UNKNOWN records
+                unknown_count = len(detected_records) - len(filtered_records)
+                if unknown_count > 0:
+                    result.add_warning(f"{currency}: filtered {unknown_count} UNKNOWN category record(s)")
+                
             except Exception as exc:
                 result.add_error(f"currency:{currency}:{exc}")
         
@@ -112,7 +143,6 @@ class AwashAdapter(JSONAdapter):
         except Exception:
             pass
         return hashlib.sha256(b"awash:unparseable").hexdigest()
-
 
 def fetch_raw(source_url: str, user_agent: str, ssl_verify: bool) -> tuple:
     """Two-step fetch: extract nonce from homepage HTML, then POST AJAX."""
@@ -169,63 +199,12 @@ def _extract_nonce(js_text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _parse_currency(currency: str, rate_data: dict, eff_date, date_basis: str) -> list:
-    """Parse one currency's rate data into 0-2 AdapterRecords."""
-    records = []
-
-    # transactional: buying / selling
-    buy = _safe_rate(rate_data.get("buying"))
-    sell = _safe_rate(rate_data.get("selling"))
-    if buy is not None or sell is not None:
-        records.append(_make(currency, "transactional", buy, sell,
-                             rate_data.get("buying"), rate_data.get("selling"),
-                             eff_date, date_basis))
-
-    # weighted_average
-    w_buy = _safe_rate(rate_data.get("weighted_buying_average"))
-    w_sell = _safe_rate(rate_data.get("weighted_selling_average"))
-    if w_buy is not None or w_sell is not None:
-        records.append(_make(currency, "weighted_average", w_buy, w_sell,
-                             rate_data.get("weighted_buying_average"),
-                             rate_data.get("weighted_selling_average"),
-                             eff_date, date_basis))
-    return records
-
-
-def _make(currency, category, buying, selling, buy_text, sell_text, eff_date, date_basis):
-    """Create AdapterRecord from extracted data."""
-    return AdapterRecord(
-        source_currency_code=currency,
-        category=category,
-        buying_rate=buying,
-        selling_rate=selling,
-        source_rate_text=f"{buy_text}/{sell_text}",
-        effective_date=eff_date,
-        effective_date_basis=date_basis,
-        source_record_key=f"{eff_date}:{currency}:{category}",
-        source_publication_key=str(eff_date) if eff_date else None,
-        unit_multiplier=1,
-        raw_excerpt={"currency": currency, "buying": buy_text, "selling": sell_text},
-        mapping_notes=[],
-    )
-
-
 def _parse_date(raw) -> Optional[date]:
     """Parse YYYY-MM-DD date string."""
     if not raw:
         return None
     try:
         return date.fromisoformat(str(raw).strip()[:10])
-    except ValueError:
-        return None
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Safely convert raw value to normalized Decimal rate."""
-    if raw is None or str(raw).strip() in ("", "0", "0.0000"):
-        return None
-    try:
-        return normalize_rate(raw)
     except ValueError:
         return None
 
