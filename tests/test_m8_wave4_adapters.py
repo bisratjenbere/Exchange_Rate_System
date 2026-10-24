@@ -98,10 +98,11 @@ def test_siinqee_normal_usd_values():
     assert usd[0].selling_rate == Decimal("164.1173")
 
 
-def test_siinqee_normal_category_unknown():
+def test_siinqee_normal_category_detected():
+    """Field detection now identifies category as transactional (was UNKNOWN before migration)."""
     records, _ = siinqee_parse(_load("siinqee", "normal"))
     for r in records:
-        assert r.category == "UNKNOWN"
+        assert r.category == "transactional"
 
 
 def test_siinqee_normal_no_date_ambiguous():
@@ -238,10 +239,11 @@ def test_ahadu_normal_identity_confirmed():
         assert istatus == IdentityStatus.CONFIRMED
 
 
-def test_ahadu_normal_category_unknown():
+def test_ahadu_normal_category_transactional():
     records, _ = ahadu_parse(_load("ahadu", "normal"))
+    # Category defaults to transactional for single field pair
     for r in records:
-        assert r.category == "UNKNOWN"
+        assert r.category == "transactional"
 
 
 def test_ahadu_normal_all_pass_validation():

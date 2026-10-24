@@ -45,10 +45,11 @@ def test_rammis_normal_usd_values():
 
 
 def test_rammis_normal_category_unknown():
-    """Single buying/selling pair — category not confirmed → UNKNOWN."""
+    """Single buying/selling pair — category detected as transactional."""
     records = rammis_parse(_load("rammis", "normal"))
     for r in records:
-        assert r.category == "UNKNOWN"
+        assert r.category == "transactional"
+
 
 
 def test_rammis_normal_effective_date_source_published():
@@ -156,16 +157,22 @@ def test_wegagen_normal_returns_list():
 def test_wegagen_normal_usd_values():
     records = weg_parse(_load("wegagen", "normal"))
     usd = [r for r in records if r.source_currency_code == "USD"]
-    assert len(usd) == 1
-    assert usd[0].buying_rate == Decimal("161.7253")
-    assert usd[0].selling_rate == Decimal("164.9598")
+    # Now emits 2 records per currency (cash + transactional)
+    assert len(usd) == 2
+    # Check both have the expected rates
+    for rec in usd:
+        assert rec.buying_rate == Decimal("161.7253")
+        assert rec.selling_rate == Decimal("164.9598")
 
 
 def test_wegagen_normal_category_unknown():
-    """buying == tra_buying — category ambiguous → UNKNOWN."""
+    """Field structure detection → cash + transactional categories."""
     records = weg_parse(_load("wegagen", "normal"))
-    for r in records:
-        assert r.category == "UNKNOWN"
+    categories = {r.category for r in records}
+    # Should have both cash and transactional, no UNKNOWN
+    assert "cash" in categories
+    assert "transactional" in categories
+    assert "UNKNOWN" not in categories
 
 
 def test_wegagen_normal_effective_date_source_published():
@@ -185,8 +192,13 @@ def test_wegagen_normal_per_row_dates_differ():
 
 def test_wegagen_normal_source_record_key_is_strapi_id():
     records = weg_parse(_load("wegagen", "normal"))
-    usd = [r for r in records if r.source_currency_code == "USD"][0]
-    assert usd.source_record_key == "1"
+    usd = [r for r in records if r.source_currency_code == "USD"]
+    # Now emits 2 records with category suffix
+    assert len(usd) == 2
+    keys = {r.source_record_key for r in usd}
+    # Keys should include category suffix: "1:cash" and "1:transactional"
+    assert "1:cash" in keys
+    assert "1:transactional" in keys
 
 
 def test_wegagen_normal_unit_multiplier():
@@ -244,7 +256,8 @@ def test_wegagen_schema_changed_raises_value_error():
 def test_wegagen_unknown_currency_passes_through():
     records = weg_parse(_load("wegagen", "unknown_currency"))
     xyz = [r for r in records if r.source_currency_code == "XYZ"]
-    assert len(xyz) == 1
+    # Now emits 2 records per currency (cash + transactional)
+    assert len(xyz) == 2
 
 
 def test_wegagen_schema_fingerprint_deterministic():

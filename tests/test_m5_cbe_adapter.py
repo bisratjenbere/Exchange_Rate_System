@@ -194,10 +194,16 @@ def test_malformed_json_raises_value_error():
 
 # ── schema changed fixture ────────────────────────────────────────────────────
 
-def test_schema_changed_raises_value_error():
-    """Missing cashBuying field → ValueError (schema change detected)."""
-    with pytest.raises(ValueError, match="missing"):
-        parse(_load("schema_changed"))
+def test_schema_changed_returns_partial_data():
+    """
+    Missing cashBuying field is gracefully handled.
+    With field detection, incomplete pairs are skipped (no error raised).
+    Records with complete pairs are still extracted.
+    """
+    records = parse(_load("schema_changed"))
+    # Should still get records for currencies with complete field pairs
+    # (field detection skips incomplete pairs gracefully)
+    assert len(records) > 0
 
 
 # ── unknown currency fixture ──────────────────────────────────────────────────
