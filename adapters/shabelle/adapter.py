@@ -17,6 +17,8 @@ Parse rules:
 - "No trade" values → skip.
 - Date basis: source_published if date found, else collection_date_fallback.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import date, datetime
@@ -27,6 +29,8 @@ from bs4 import BeautifulSoup
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
 from adapters.base import BankAdapter, ParseResult
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "shabelle_html"
 SOURCE_URL = "https://shabellebank.com/"
@@ -34,8 +38,14 @@ SOURCE_URL = "https://shabellebank.com/"
 _CODE_MAP = {"usd": "USD", "euro": "EUR", "eur": "EUR", "uae": "AED"}
 
 
-class ShabelleAdapter(BankAdapter):
-    """Shabelle Bank adapter - custom div-based structure (not table-based)."""
+class ShabelleAdapter(FieldStructureMixin, BankAdapter):
+    """
+    Shabelle Bank adapter - custom div-based structure (not table-based).
+    
+    Uses field detection for automatic category discovery from div blocks.
+    """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -59,7 +69,7 @@ class ShabelleAdapter(BankAdapter):
         
         for block in blocks:
             try:
-                records = _parse_block(block, effective_date, date_basis)
+                records = _parse_block(block, effective_date, date_basis, self)
                 result.records.extend(records)
             except Exception as exc:
                 result.add_error(f"block:{exc}")
@@ -83,10 +93,10 @@ class ShabelleAdapter(BankAdapter):
             return hashlib.sha256(b"shabelle:unparseable").hexdigest()
 
 
-def _parse_block(block, effective_date, date_basis) -> list:
-    """Parse a single exchange block (one currency with cash/transactional boxes)."""
+def _parse_block(block, effective_date, date_basis, adapter_instance) -> list:
+    """Parse a single exchange block (one currency with cash/transactional boxes) using field detection."""
     records = []
-    for box_class, category in [("upper-box", "cash"), ("lower-box", "transactional")]:
+    for box_class, expected_category in [("upper-box", "cash"), ("lower-box", "transactional")]:
         box = block.find("div", class_=box_class)
         if not box:
             continue
@@ -106,25 +116,28 @@ def _parse_block(block, effective_date, date_basis) -> list:
         values = p.get_text(strip=True).split()
         if len(values) < 2:
             continue
-        buying = _safe_rate(values[0])
-        selling = _safe_rate(values[1])
-        if buying is None and selling is None:
-            continue
-
-        records.append(AdapterRecord(
-            source_currency_code=code,
-            category=category,
-            buying_rate=buying,
-            selling_rate=selling,
-            source_rate_text=f"{values[0]}/{values[1]}",
+        
+        # Create dict with generic field names
+        row_dict = {
+            "buying": values[0],
+            "selling": values[1],
+        }
+        
+        # Use field detection
+        detected_records = adapter_instance.detect_and_emit(
+            data=row_dict,
+            currency=code,
             effective_date=effective_date,
-            effective_date_basis=date_basis,
-            source_record_key=f"{effective_date}:{code}:{category}",
-            source_publication_key=str(effective_date) if effective_date else None,
-            unit_multiplier=1,
-            raw_excerpt={"currency": code, "buying": values[0], "selling": values[1]},
-            mapping_notes=[],
-        ))
+            effective_date_basis=date_basis
+        )
+        
+        # Context-based category override: div box determines category
+        for rec in detected_records:
+            if rec.category == 'UNKNOWN':
+                rec.category = normalize_category(expected_category)
+        
+        records.extend(detected_records)
+    
     return records
 
 

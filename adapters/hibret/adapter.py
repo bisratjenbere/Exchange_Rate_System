@@ -1,15 +1,16 @@
 """
 adapters/hibret/adapter.py — Hibret Bank.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import datetime, date
-from decimal import Decimal
 from typing import Optional
 from bs4 import BeautifulSoup
 
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
 from adapters.base import HTMLTableAdapter, ParseResult
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "hibret_html"
 SOURCE_URL = "https://www.hibretbank.com.et/about/exchange-rate/"
@@ -23,8 +24,10 @@ _CODE_ALIASES = {
 }
 
 
-class HibretAdapter(HTMLTableAdapter):
-    """Hibret Bank adapter - single table with cash and transactional columns."""
+class HibretAdapter(FieldStructureMixin, HTMLTableAdapter):
+    """Hibret Bank adapter with field detection - single table with cash and transactional columns."""
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -40,12 +43,51 @@ class HibretAdapter(HTMLTableAdapter):
         date_basis = "source_published" if effective_date else "collection_date_fallback"
         
         try:
-            records = _parse_cash_txn_table(tables[0], effective_date, date_basis)
+            records = self._parse_cash_txn_table(tables[0], effective_date, date_basis)
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0_cash_txn:{exc}")
         
         return result
+    
+    def _parse_cash_txn_table(self, table, effective_date, date_basis) -> list:
+        """Parse table with cash and transactional columns using field detection."""
+        rows = table.find_all("tr")
+        data_rows = [r for r in rows if r.find("td")]
+        if not data_rows:
+            return []
+        records = []
+        for row in data_rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 6:
+                continue
+            raw = cells[1].strip()
+            if not raw:
+                continue
+            m = re.match(r'^([A-Z]{3})\b', raw, re.IGNORECASE)
+            currency_code = m.group(1).upper() if m else _CODE_ALIASES.get(raw.upper())
+            if not currency_code:
+                continue
+            
+            # Create dict with category prefixes
+            row_dict = {
+                "cash_buying": cells[2],
+                "cash_selling": cells[3],
+                "transactional_buying": cells[4],
+                "transactional_selling": cells[5],
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=["ssl_verify_false:access_finding_recorded"]
+            )
+            
+            records.extend(detected_records)
+        return records
 
 
 def _parse_date(soup) -> Optional[date]:
@@ -60,54 +102,6 @@ def _parse_date(soup) -> Optional[date]:
             except ValueError: 
                 pass
     return None
-
-
-def _parse_cash_txn_table(table, effective_date, date_basis) -> list:
-    """Parse table with cash and transactional columns."""
-    rows = table.find_all("tr")
-    data_rows = [r for r in rows if r.find("td")]
-    if not data_rows:
-        return []
-    records = []
-    for row in data_rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 6:
-            continue
-        raw = cells[1].strip()
-        if not raw:
-            continue
-        m = re.match(r'^([A-Z]{3})\b', raw, re.IGNORECASE)
-        currency_code = m.group(1).upper() if m else _CODE_ALIASES.get(raw.upper())
-        if not currency_code:
-            continue
-        for category, buy_idx, sell_idx in [("cash", 2, 3), ("transactional", 4, 5)]:
-            buying = _safe_rate(cells[buy_idx])
-            selling = _safe_rate(cells[sell_idx])
-            if buying is None and selling is None:
-                continue
-            records.append(AdapterRecord(
-                source_currency_code=currency_code,
-                category=category,
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{cells[buy_idx]}/{cells[sell_idx]}",
-                effective_date=effective_date,
-                effective_date_basis=date_basis,
-                source_record_key=None,
-                source_publication_key=str(effective_date) if effective_date else None,
-                unit_multiplier=1,
-                raw_excerpt={"currency": currency_code, "buying": cells[buy_idx], "selling": cells[sell_idx]},
-                mapping_notes=["ssl_verify_false:access_finding_recorded"],
-            ))
-    return records
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Convert raw rate string to Decimal, returning None on failure."""
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
 
 
 # ============================================================================

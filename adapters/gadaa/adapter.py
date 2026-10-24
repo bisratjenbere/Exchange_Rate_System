@@ -14,6 +14,9 @@ Parse rules:
 - updated_at ISO timestamp date part → source_inferred effective_date
 - 0 / null → None
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to use FieldStructureMixin for automatic category detection.
+Special handling: market_type field provides explicit category for buy_rate/sell_rate.
 """
 import hashlib
 import json
@@ -23,19 +26,28 @@ from typing import Optional
 
 from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 from pipeline.normalize import normalize_rate
 
 ADAPTER_KEY = "gadaa_api"
 SOURCE_URL = "https://gadaabank.com.et/api/v1/exchange-rates"
 
 
-class GadaaAdapter(JSONAdapter):
+class GadaaAdapter(FieldStructureMixin, JSONAdapter):
     """
-    Gadaa Bank adapter using JSONAdapter base class.
+    Gadaa Bank adapter using JSONAdapter base class with field detection.
     
-    Parses JSON from REST API with market_type field determining category.
-    Emits up to 2 records per currency (market_type + weighted_average).
+    Parses JSON from REST API. Uses market_type field for primary category,
+    and field detection for weighted_average records.
+    
+    Field Structure: Mixed approach
+    - buy_rate/sell_rate → category from market_type field
+    - weighted_buy_rate/weighted_sell_rate → weighted_average (auto-detected)
     """
+    
+    # Empty config - field detection will find weighted_buy_rate/weighted_sell_rate
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Gadaa API URL."""
@@ -47,7 +59,7 @@ class GadaaAdapter(JSONAdapter):
     
     def _process_data(self, data, **options) -> ParseResult:
         """
-        Extract AdapterRecords from parsed JSON data.
+        Extract AdapterRecords from parsed JSON data using field detection.
         
         Args:
             data: Parsed JSON (should be dict with 'data' array)
@@ -65,8 +77,45 @@ class GadaaAdapter(JSONAdapter):
         
         for row in rows:
             try:
-                records = _parse_row(row)
-                result.records.extend(records)
+                code = str(row.get("currency", "")).strip()
+                if not code or not row.get("is_active", True):
+                    continue
+
+                effective_date = _parse_date(row.get("updated_at"))
+                date_basis = "source_inferred" if effective_date else "collection_date_fallback"
+                
+                # Use field detection to automatically discover and emit records
+                # This will find weighted_buy_rate/weighted_sell_rate and buy_rate/sell_rate
+                detected_records = self.detect_and_emit(
+                    data=row,
+                    currency=code,
+                    source_record_id=str(row.get("id")) if row.get("id") else None,
+                    effective_date=effective_date,
+                    effective_date_basis=date_basis
+                )
+                
+                # Post-process: Override category for buy_rate/sell_rate using market_type field
+                market_type = str(row.get("market_type", "")).lower()
+                explicit_category = normalize_category(market_type) if market_type else normalize_category("transactional")
+                
+                for rec in detected_records:
+                    # If this is buy_rate/sell_rate (not weighted), use market_type category
+                    # We can identify this by checking if it's NOT weighted_average
+                    if rec.category != 'weighted_average' and rec.category != 'UNKNOWN':
+                        # This is likely buy_rate/sell_rate - use market_type
+                        rec.category = explicit_category
+                    elif rec.category == 'UNKNOWN':
+                        # Generic buy_rate/sell_rate detected - use market_type
+                        rec.category = explicit_category
+                    # else: weighted_average stays as is
+                    
+                    # Add market_type to raw_excerpt for traceability
+                    if isinstance(rec.raw_excerpt, dict):
+                        rec.raw_excerpt["market_type"] = row.get("market_type")
+                        rec.raw_excerpt["updated_at"] = row.get("updated_at")
+                
+                result.records.extend(detected_records)
+                
             except Exception as exc:
                 result.add_error(f"row:{row.get('currency')}:{exc}")
         
@@ -91,77 +140,6 @@ class GadaaAdapter(JSONAdapter):
             return hashlib.sha256(b"gadaa:unparseable").hexdigest()
 
 
-def _parse_row(row: dict) -> list:
-    """Parse one data row into up to 2 AdapterRecords."""
-    code = str(row.get("currency", "")).strip()
-    if not code or not row.get("is_active", True):
-        return []
-
-    effective_date = _parse_date(row.get("updated_at"))
-    date_basis = "source_inferred" if effective_date else "collection_date_fallback"
-    market_type = str(row.get("market_type", "")).lower()
-    category = "transactional" if market_type == "transaction" else "cash" if market_type == "cash" else "transactional"
-
-    records = []
-    buy = _safe_rate(row.get("buy_rate"))
-    sell = _safe_rate(row.get("sell_rate"))
-    if buy is not None or sell is not None:
-        records.append(_make(code, category, buy, sell,
-                             row.get("buy_rate"), row.get("sell_rate"),
-                             effective_date, date_basis, row))
-
-    w_buy = _safe_rate(row.get("weighted_buy_rate"))
-    w_sell = _safe_rate(row.get("weighted_sell_rate"))
-    if w_buy is not None or w_sell is not None:
-        records.append(_make(code, "weighted_average", w_buy, w_sell,
-                             row.get("weighted_buy_rate"), row.get("weighted_sell_rate"),
-                             effective_date, date_basis, row))
-    return records
-
-
-def _make(code, category, buying, selling, buy_text, sell_text, eff_date, date_basis, row):
-    """Create AdapterRecord from extracted data."""
-    return AdapterRecord(
-        source_currency_code=code,
-        category=category,
-        buying_rate=buying,
-        selling_rate=selling,
-        source_rate_text=f"{buy_text}/{sell_text}",
-        effective_date=eff_date,
-        effective_date_basis=date_basis,
-        source_record_key=str(row.get("id")) if row.get("id") else None,
-        source_publication_key=None,
-        unit_multiplier=1,
-        raw_excerpt={"currency": code, "buy_rate": buy_text, "sell_rate": sell_text,
-                     "market_type": row.get("market_type"), "updated_at": row.get("updated_at")},
-        mapping_notes=[],
-    )
-
-
-def _parse_date(raw) -> Optional[date]:
-    """Parse ISO date from timestamp string."""
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(str(raw).strip()[:10])
-    except ValueError:
-        return None
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Safely convert raw value to normalized Decimal rate."""
-    if raw is None or raw == 0:
-        return None
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Backward Compatibility Wrappers
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def parse(raw_json: str) -> tuple:
     """
     Old function API (for backward compatibility).
@@ -177,6 +155,16 @@ def parse(raw_json: str) -> tuple:
     adapter = GadaaAdapter()
     result = adapter.parse(raw_json)
     return result.records, result.errors
+
+
+def _parse_date(raw) -> Optional[date]:
+    """Parse ISO date from timestamp string."""
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw).strip()[:10])
+    except ValueError:
+        return None
 
 
 def schema_fingerprint(raw_json: str) -> str:

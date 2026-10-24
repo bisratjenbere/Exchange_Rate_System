@@ -6,18 +6,18 @@ Parse rules:
 - Date in text: "Oct 12, 2026" → source_published.
 - Only one visible category in static HTML (Cash tab active) → category UNKNOWN until verified.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
-import hashlib
 import re
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTextAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "enat_html"
 SOURCE_URL = "https://www.enatbanksc.com/"
@@ -36,13 +36,15 @@ _RATE_RE = re.compile(r"([A-Z]{3})\s+([\d.]+)\s+([\d.]+)")
 _BLOCK_START = re.compile(r"Currency\s+Buying\s+Selling", re.IGNORECASE)
 
 
-class EnatAdapter(HTMLTextAdapter):
+class EnatAdapter(FieldStructureMixin, HTMLTextAdapter):
     """
-    Enat Bank adapter using HTMLTextAdapter base class.
+    Enat Bank adapter with field detection.
     
     Type G adapter that extracts rates from text patterns.
-    Requires category parameter.
+    Field Structure: Generic fields → category from context (default transactional)
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Enat Bank source URL."""
@@ -58,7 +60,7 @@ class EnatAdapter(HTMLTextAdapter):
     
     def _extract_from_text(self, text: str, soup: BeautifulSoup, **options) -> ParseResult:
         """
-        Extract AdapterRecords from normalized HTML text using regex patterns.
+        Extract AdapterRecords from normalized HTML text using regex patterns and field detection.
         
         Args:
             text: Normalized text with single-space separation
@@ -70,8 +72,8 @@ class EnatAdapter(HTMLTextAdapter):
         """
         result = ParseResult()
         
-        # Extract category from options
-        category = options.get("category", "UNKNOWN")
+        # Extract category from options (default to cash based on visible tab)
+        category = options.get("category", "cash")
         
         # Extract effective date from text
         effective_date = _extract_date(text)
@@ -92,24 +94,28 @@ class EnatAdapter(HTMLTextAdapter):
                 break  # stop at repeated codes (currency converter section)
             seen.add(code)
             try:
-                buying = _safe_rate(m.group(2))
-                selling = _safe_rate(m.group(3))
-                if buying is None and selling is None:
-                    continue
-                result.records.append(AdapterRecord(
-                    source_currency_code=code,
-                    category=category,
-                    buying_rate=buying,
-                    selling_rate=selling,
-                    source_rate_text=f"{m.group(2)}/{m.group(3)}",
+                # Create dict with generic field names
+                row_dict = {
+                    "buying": m.group(2),
+                    "selling": m.group(3),
+                }
+                
+                # Use field detection
+                detected_records = self.detect_and_emit(
+                    data=row_dict,
+                    currency=code,
                     effective_date=effective_date,
                     effective_date_basis=date_basis,
-                    source_record_key=None,
-                    source_publication_key=None,
-                    unit_multiplier=1,
-                    raw_excerpt={"currency": code, "buying": m.group(2), "selling": m.group(3)},
-                    mapping_notes=["category_unknown:only_cash_tab_visible_in_static_html"],
-                ))
+                    mapping_notes=["category_unknown:only_cash_tab_visible_in_static_html"]
+                )
+                
+                # Context-based category override
+                for rec in detected_records:
+                    if rec.category == 'UNKNOWN':
+                        rec.category = normalize_category(category)
+                
+                result.records.extend(detected_records)
+                
             except Exception as exc:
                 result.add_error(f"currency:{code}:{exc}")
         
@@ -126,12 +132,14 @@ class EnatAdapter(HTMLTextAdapter):
             SHA256 hex digest of structural markers
         """
         try:
+            import hashlib
             soup = BeautifulSoup(raw_content, "html.parser")
             text = " ".join(soup.get_text(" ", strip=True).split())
             markers = ["Currency Buying Selling", "Swift"]
             present = [m for m in markers if m in text]
             return hashlib.sha256(str(present).encode()).hexdigest()
         except Exception:
+            import hashlib
             return hashlib.sha256(b"enat:unparseable").hexdigest()
 
 
@@ -145,14 +153,6 @@ def _extract_date(text: str) -> Optional[date]:
         return None
     try:
         return date(int(m.group(3)), month, int(m.group(2)))
-    except ValueError:
-        return None
-
-
-def _safe_rate(raw: str) -> Optional[Decimal]:
-    """Safely convert raw rate string to Decimal."""
-    try:
-        return normalize_rate(raw.strip())
     except ValueError:
         return None
 

@@ -12,16 +12,17 @@ Parse rules:
 - No source_record_key. identity_status = derived (source_published date).
 - Schema change detection: if expected labels absent → raises ValueError.
 - Partial failure: returns (records, errors). Never raises on parse.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 from bs4 import BeautifulSoup
 
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
 from adapters.base import HTMLTextAdapter, ParseResult
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "sidama_html"
 SOURCE_URL = "https://sidamabanksc.com/exchange-rate/"
@@ -48,8 +49,10 @@ _CURRENCY_BLOCK_RE = re.compile(
 )
 
 
-class SidamaAdapter(HTMLTextAdapter):
-    """Sidama Bank adapter - text extraction with regex patterns."""
+class SidamaAdapter(FieldStructureMixin, HTMLTextAdapter):
+    """Sidama Bank adapter with field detection - text extraction with regex patterns."""
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -58,7 +61,7 @@ class SidamaAdapter(HTMLTextAdapter):
         return ADAPTER_KEY
     
     def _extract_from_text(self, text: str, soup: BeautifulSoup, **options) -> ParseResult:
-        """Extract exchange rates from normalized text using regex patterns."""
+        """Extract exchange rates from normalized text using regex patterns and field detection."""
         result = ParseResult()
         
         effective_date = _extract_date(text)
@@ -66,56 +69,58 @@ class SidamaAdapter(HTMLTextAdapter):
         
         for m in _CURRENCY_BLOCK_RE.finditer(text):
             try:
-                recs = _parse_match(m, effective_date, date_basis)
+                recs = self._parse_match(m, effective_date, date_basis)
                 result.records.extend(recs)
             except Exception as exc:
                 result.add_error(f"currency_block:{m.group(1)}:{exc}")
         
         return result
     
+    def _parse_match(self, m, effective_date, date_basis) -> list:
+        """Parse a single currency block match into AdapterRecords using field detection."""
+        code = m.group(1).upper()
+        values = {
+            "cash": (m.group(2), m.group(3)),
+            "transactional": (m.group(4), m.group(5)),
+            "weighted_average": (m.group(6), m.group(7)),
+        }
+        records = []
+        for category, (buy_raw, sell_raw) in values.items():
+            # Create dict with generic field names
+            row_dict = {
+                "buying": buy_raw,
+                "selling": sell_raw,
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=code,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=["prev_weighted_date_semantics:TO_VERIFY"] if category == "weighted_average" else []
+            )
+            
+            # Context-based category override
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category(category)
+            
+            records.extend(detected_records)
+        return records
+    
     def schema_fingerprint(self, raw_content: str) -> str:
         """Generate fingerprint based on presence of text markers."""
         try:
+            import hashlib
             soup = BeautifulSoup(raw_content, "html.parser")
             text = " ".join(soup.get_text(" ", strip=True).split())
             markers = ["Cash Buying", "Cash Selling", "Transactional Buying", "Prev Weighted"]
             present = [m for m in markers if m in text]
-            import hashlib
             return hashlib.sha256(str(present).encode()).hexdigest()
         except Exception:
             import hashlib
             return hashlib.sha256(b"sidama:unparseable").hexdigest()
-
-
-def _parse_match(m, effective_date, date_basis) -> list:
-    """Parse a single currency block match into AdapterRecords."""
-    code = m.group(1).upper()
-    values = {
-        "cash": (m.group(2), m.group(3)),
-        "transactional": (m.group(4), m.group(5)),
-        "weighted_average": (m.group(6), m.group(7)),
-    }
-    records = []
-    for category, (buy_raw, sell_raw) in values.items():
-        buying = _safe_rate(buy_raw)
-        selling = _safe_rate(sell_raw)
-        if buying is None and selling is None:
-            continue
-        records.append(AdapterRecord(
-            source_currency_code=code,
-            category=category,
-            buying_rate=buying,
-            selling_rate=selling,
-            source_rate_text=f"{buy_raw}/{sell_raw}",
-            effective_date=effective_date,
-            effective_date_basis=date_basis,
-            source_record_key=None,
-            source_publication_key=None,
-            unit_multiplier=1,
-            raw_excerpt={"currency": code, "buying": buy_raw, "selling": sell_raw},
-            mapping_notes=["prev_weighted_date_semantics:TO_VERIFY"] if category == "weighted_average" else [],
-        ))
-    return records
 
 
 def _extract_date(text: str) -> Optional[date]:
@@ -128,16 +133,6 @@ def _extract_date(text: str) -> Optional[date]:
         return None
     try:
         return date(int(m.group(3)), month, int(m.group(2)))
-    except ValueError:
-        return None
-
-
-def _safe_rate(raw: str) -> Optional[Decimal]:
-    """Convert raw rate string to Decimal, returning None on failure."""
-    if not raw or raw.strip().lower() == "no trade":
-        return None
-    try:
-        return normalize_rate(raw.strip())
     except ValueError:
         return None
 

@@ -8,12 +8,16 @@ Parse rules:
 - No date → collection_date_fallback → identity_status=ambiguous.
 - Review signal: buying > selling (observed for USD in table 1).
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 from decimal import Decimal
 from typing import Optional
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 from pipeline.normalize import normalize_rate
 from adapters.base import HTMLTableAdapter, ParseResult
 
@@ -21,8 +25,14 @@ ADAPTER_KEY = "global_html"
 SOURCE_URL = "https://www.globalbankethiopia.com/remittance-forex/"
 
 
-class GlobalAdapter(HTMLTableAdapter):
-    """Global Bank Ethiopia adapter - parses 2 tables with category parameter."""
+class GlobalAdapter(FieldStructureMixin, HTMLTableAdapter):
+    """
+    Global Bank Ethiopia adapter - parses 2 tables with category parameter.
+    
+    Uses field detection for automatic category discovery.
+    """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -40,6 +50,8 @@ class GlobalAdapter(HTMLTableAdapter):
         
         for i, table in enumerate(tables_to_process):
             try:
+                # Pass self reference to helper via table object
+                table._adapter_instance = self
                 records = _parse_table(table, table_index=i, category=category)
                 result.records.extend(records)
             except Exception as exc:
@@ -59,27 +71,36 @@ def _parse_table(table, table_index: int, category: str = "transactional") -> li
         currency_code = cells[0].strip()
         if not currency_code:
             continue
-        buying = _safe_rate(cells[1])
-        selling = _safe_rate(cells[2])
-        if buying is None and selling is None:
-            continue
+        
+        # Create dict with generic field names
+        row_dict = {
+            "buying": cells[1],
+            "selling": cells[2],
+        }
+        
+        # Use field detection
         notes = [f"category_unknown:table_{table_index}_unverified"]
-        if buying is not None and selling is not None and buying > selling:
-            notes.append("review_signal:buying_greater_than_selling")
-        records.append(AdapterRecord(
-            source_currency_code=currency_code,
-            category=category,
-            buying_rate=buying,
-            selling_rate=selling,
-            source_rate_text=f"{cells[1]}/{cells[2]}",
+        detected_records = table._adapter_instance.detect_and_emit(
+            data=row_dict,
+            currency=currency_code,
             effective_date=None,
             effective_date_basis="collection_date_fallback",
-            source_record_key=None,
-            source_publication_key=None,
-            unit_multiplier=1,
-            raw_excerpt={"currency": currency_code, "buying": cells[1], "selling": cells[2], "table": table_index},
-            mapping_notes=notes,
-        ))
+            mapping_notes=notes
+        )
+        
+        # Context-based category override: parameter-provided category
+        for rec in detected_records:
+            if rec.category == 'UNKNOWN':
+                rec.category = normalize_category(category)
+            rec.raw_excerpt = {"currency": currency_code, "buying": cells[1], 
+                              "selling": cells[2], "table": table_index}
+            
+            # Check for review signal
+            if rec.buying_rate is not None and rec.selling_rate is not None and rec.buying_rate > rec.selling_rate:
+                if "review_signal:buying_greater_than_selling" not in rec.mapping_notes:
+                    rec.mapping_notes.append("review_signal:buying_greater_than_selling")
+        
+        records.extend(detected_records)
     return records
 
 

@@ -14,16 +14,19 @@ Parse rules:
 - Category: transactional (only category published).
 - Date basis: source_published (date is in each row).
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to use FieldStructureMixin for automatic category detection.
+Converts HTML table cells into dict structure with field names for field detection.
 """
 import re
-from datetime import date
-from decimal import Decimal
+from datetime import date, datetime
 from typing import Optional
 from bs4 import BeautifulSoup
 
 from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from pipeline.category_normalizer import normalize_category
 from adapters.base import HTMLTableAdapter, ParseResult
+from field_detection.mixin import FieldStructureMixin
 
 ADAPTER_KEY = "oromia_html"
 SOURCE_URL = "https://www.oromiabanksc.com/"
@@ -36,8 +39,18 @@ FETCH_HEADERS = {
 }
 
 
-class OromiaAdapter(HTMLTableAdapter):
-    """Oromia Bank adapter - ninja-table with historical data, filters to most recent date."""
+class OromiaAdapter(FieldStructureMixin, HTMLTableAdapter):
+    """
+    Oromia Bank adapter - ninja-table with historical data.
+    
+    Field Structure: HTML table converted to dict
+    - Buying Rate column → buying_rate field
+    - Selling Rate column → selling_rate field
+    - Field detection auto-discovers and assigns category (transactional)
+    """
+    
+    # Empty config - field detection will discover buying_rate/selling_rate
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -46,7 +59,7 @@ class OromiaAdapter(HTMLTableAdapter):
         return ADAPTER_KEY
     
     def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
-        """Process ninja-table from Oromia Bank, filtering to most recent date."""
+        """Process ninja-table from Oromia Bank using field detection."""
         result = ParseResult()
         
         # Find specific ninja-table
@@ -63,7 +76,7 @@ class OromiaAdapter(HTMLTableAdapter):
             result.add_error("no_data_rows")
             return result
         
-        # Parse all rows into (date, currency, buying, selling)
+        # Parse all rows into structured data
         parsed = []
         for row in rows[1:]:
             cells = [td.get_text(strip=True) for td in row.find_all("td")]
@@ -78,11 +91,16 @@ class OromiaAdapter(HTMLTableAdapter):
                 selling_text = cells[3].strip()
                 if not currency or buying_text == "No Trade" or selling_text == "No Trade":
                     continue
-                buying = _safe_rate(buying_text)
-                selling = _safe_rate(selling_text)
-                if buying is None and selling is None:
-                    continue
-                parsed.append((row_date, currency, buying, selling, buying_text, selling_text))
+                
+                # Convert table cells to dict for field detection
+                row_dict = {
+                    "buying_rate": buying_text,
+                    "selling_rate": selling_text,
+                    "date": str(row_date),
+                    "currency": currency
+                }
+                parsed.append((row_date, currency, row_dict))
+                
             except Exception as exc:
                 result.add_error(f"row:{cells}:{exc}")
         
@@ -92,24 +110,26 @@ class OromiaAdapter(HTMLTableAdapter):
         
         # Only emit the most recent date
         max_date = max(r[0] for r in parsed)
-        for row_date, currency, buying, selling, buy_text, sell_text in parsed:
+        for row_date, currency, row_dict in parsed:
             if row_date != max_date:
                 continue
-            result.records.append(AdapterRecord(
-                source_currency_code=currency,
-                category="transactional",
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{buy_text}/{sell_text}",
+            
+            # Use field detection to automatically discover and emit records
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency,
                 effective_date=max_date,
                 effective_date_basis="source_published",
-                source_record_key=f"{max_date}:{currency}",
-                source_publication_key=str(max_date),
-                unit_multiplier=1,
-                raw_excerpt={"date": str(max_date), "currency": currency,
-                             "buying": buy_text, "selling": sell_text},
-                mapping_notes=[],
-            ))
+                source_record_id=f"{max_date}:{currency}",
+                source_publication_id=str(max_date)
+            )
+            
+            # Post-process: Oromia only publishes transactional rates
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category("transactional")
+            
+            result.records.extend(detected_records)
         
         return result
 
@@ -121,21 +141,10 @@ def _parse_date(raw: str) -> Optional[date]:
     # Formats seen: "Oct 10, 2026", "2026-10-10"
     for fmt in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
         try:
-            from datetime import datetime
             return datetime.strptime(raw.strip(), fmt).date()
         except ValueError:
             continue
     return None
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Convert raw rate string to Decimal, returning None on failure."""
-    if not raw or str(raw).strip() in ("", "No Trade", "-", "N/A"):
-        return None
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
 
 
 # ============================================================================
@@ -152,3 +161,4 @@ def parse(raw_html: str) -> tuple:
 def schema_fingerprint(raw_html: str) -> str:
     """Generate schema fingerprint. Module-level wrapper."""
     return _adapter_instance.schema_fingerprint(raw_html)
+
