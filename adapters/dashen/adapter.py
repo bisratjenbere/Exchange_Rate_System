@@ -13,22 +13,25 @@ Parse rules (ADR-006 §6, mapping doc):
 - "No Trade" / "-" / empty → None. No zeros observed but sentinel rule applies.
 - Partial failure: if one table is missing/malformed, emit what was parsed and record the error.
   Never apply values from one table to another.
+
+MIGRATION NOTE: Migrated to use FieldStructureMixin for automatic category detection.
+Column headers are converted to field names, then field detection discovers pairs.
+Table position determines category context for field override.
 """
 import re
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTableAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "dashen_html"
 SOURCE_URL = "https://dashenbanksc.com/daily-exchange-rates/"
 
-# Table index → category
+# Table index → category (for context-based override)
 _TABLE_CATEGORIES = {0: "transactional", 1: "cash", 2: "weighted_average"}
 
 # Regex to extract date from weighted average header
@@ -42,14 +45,18 @@ _MONTH_MAP = {
 }
 
 
-class DashenAdapter(HTMLTableAdapter):
+class DashenAdapter(FieldStructureMixin, HTMLTableAdapter):
     """
-    Dashen Bank adapter.
+    Dashen Bank adapter with field detection.
     
-    Type D adapter (multi-table HTML with per-table categories).
-    Parses HTML with 3 tables: transactional, cash, weighted_average.
-    Each table is parsed independently with its own effective date.
+    Field Structure: Table columns → dict fields
+    - Column headers converted to field names (e.g., "Transaction Buying" → "transaction_buying")
+    - Field detection discovers buying/selling pairs
+    - Table position provides category context for UNKNOWN override
     """
+    
+    # Empty config - field detection will discover from column headers
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Dashen Bank website URL."""
@@ -60,39 +67,17 @@ class DashenAdapter(HTMLTableAdapter):
         return ADAPTER_KEY
     
     def parse(self, raw_content: str, **options) -> ParseResult:
-        """
-        Parse HTML content, extract tables, and delegate to _process_tables().
-        
-        Overrides base class to provide Dashen-specific error reporting
-        when no tables are found (reports all 3 expected tables as missing).
-        
-        Args:
-            raw_content: Raw HTML string
-            **options: Additional options passed to _process_tables()
-            
-        Returns:
-            ParseResult from _process_tables()
-        """
+        """Parse HTML content and extract tables."""
         soup = BeautifulSoup(raw_content, "html.parser")
         tables = soup.find_all("table")
-        
-        # Always call _process_tables even if no tables found
-        # This allows Dashen-specific error reporting for all 3 expected tables
         return self._process_tables(soup, tables, **options)
     
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
-        """
-        Extract AdapterRecords from Dashen HTML tables.
-        
-        Args:
-            soup: BeautifulSoup parsed HTML
-            tables: List of table elements
-            **options: Not used by Dashen adapter
-            
-        Returns:
-            ParseResult with extracted records and any errors
-        """
+        """Extract AdapterRecords from Dashen HTML tables using field detection."""
         result = ParseResult()
+        
+        # Extract global "Applicable on" date (applies to all tables)
+        global_date = self._extract_global_date(soup)
         
         # If no tables found, report all three table categories as missing
         if not tables:
@@ -101,133 +86,179 @@ class DashenAdapter(HTMLTableAdapter):
             return result
         
         # Parse each table by index
-        # Note: Transactional/cash tables have NO source-published date
-        # Only weighted_average table has date embedded in its header
-        for idx, category in _TABLE_CATEGORIES.items():
+        for idx, expected_category in _TABLE_CATEGORIES.items():
             if idx >= len(tables):
-                result.add_error(f"table_{idx}_{category}:missing")
+                result.add_error(f"table_{idx}_{expected_category}:missing")
                 continue
             try:
-                table_records = self._parse_table(tables[idx], idx, category)
+                table_records = self._parse_table(tables[idx], idx, expected_category, global_date)
                 result.records.extend(table_records)
             except Exception as exc:
-                result.add_error(f"table_{idx}_{category}:{exc}")
+                result.add_error(f"table_{idx}_{expected_category}:{exc}")
         
         return result
     
-    def _parse_table(self, table, idx: int, category: str) -> list:
+    def _extract_global_date(self, soup: BeautifulSoup) -> Optional[date]:
         """
-        Parse a single Dashen table based on its category.
+        Extract global 'Applicable on October 24, 2026' date from page.
         
-        Args:
-            table: BeautifulSoup table element
-            idx: Table index (0, 1, or 2)
-            category: Table category (transactional, cash, or weighted_average)
-            
-        Returns:
-            List of AdapterRecords
+        This date applies to all tables on the page.
         """
+        # Search for h4 tag containing "Applicable on"
+        for tag in soup.find_all(['h4', 'h3', 'h2', 'p', 'div']):
+            text = tag.get_text(strip=True)
+            if 'applicable on' in text.lower():
+                # Extract date from "Applicable on October 24, 2026"
+                match = re.search(r'([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})', text)
+                if match:
+                    try:
+                        month_name, day, year = match.groups()
+                        month = _MONTH_MAP.get(month_name.lower())  # Use full month name
+                        if month:
+                            return date(int(year), month, int(day))
+                    except (ValueError, KeyError):
+                        pass
+        return None
+    
+    def _parse_table(self, table, idx: int, expected_category: str, global_date: Optional[date] = None) -> list:
+        """Parse a single Dashen table using field detection."""
         rows = table.find_all("tr")
         if not rows:
             return []
-        if category == "weighted_average":
-            return self._parse_weighted_table(rows)
-        else:
-            return self._parse_standard_table(rows, category)
-    
-    def _parse_standard_table(self, rows, category: str) -> list:
-        """
-        Parse transactional or cash table.
         
-        Note: These tables have NO source-published date, so effective_date=None
-        and effective_date_basis=collection_date_fallback always.
+        if expected_category == "weighted_average":
+            return self._parse_weighted_table(rows, expected_category, global_date)
+        else:
+            return self._parse_standard_table(rows, expected_category, global_date)
+    
+    def _parse_standard_table(self, rows, expected_category: str, global_date: Optional[date] = None) -> list:
         """
-        header_cells = [c.get_text(strip=True).lower() for c in rows[0].find_all(["th", "td"])]
-        buy_idx = _find_col(header_cells, ["transaction buying", "cash buying", "buying"])
-        sell_idx = _find_col(header_cells, ["transaction selling", "cash selling", "selling"])
-        if buy_idx is None or sell_idx is None:
-            raise ValueError(f"Cannot find buying/selling columns in header: {header_cells}")
-
-        # Transactional/cash tables have no source-published date
-        effective_date = None
-        date_basis = "collection_date_fallback"
-
+        Parse transactional or cash table using field detection.
+        
+        Uses global_date if available, otherwise falls back to collection_date_fallback.
+        """
+        # Extract header and create field name mapping
+        header_row = rows[0]
+        headers = [c.get_text(strip=True) for c in header_row.find_all(["th", "td"])]
+        
+        # Convert headers to field names
+        field_names = [_header_to_field_name(h) for h in headers]
+        
+        # Use global date if available
+        effective_date = global_date
+        date_basis = "source_published" if effective_date else "collection_date_fallback"
+        
         records = []
         for row in rows[1:]:
             cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
-            if len(cells) < max(buy_idx, sell_idx) + 1:
+            if len(cells) < 2:
                 continue
+            
             currency_code = cells[0].strip()
             currency_name = cells[1].strip() if len(cells) > 1 else None
             if not currency_code:
                 continue
-            buying = _safe_rate(cells[buy_idx])
-            selling = _safe_rate(cells[sell_idx])
-            if buying is None and selling is None:
-                continue
-            records.append(AdapterRecord(
-                source_currency_code=currency_code,
+            
+            # Create dict from cells using field names
+            row_dict = {}
+            for i, cell_value in enumerate(cells):
+                if i < len(field_names) and field_names[i]:
+                    row_dict[field_names[i]] = cell_value
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
                 currency_name=currency_name or None,
-                category=category,
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{cells[buy_idx]}/{cells[sell_idx]}",
                 effective_date=effective_date,
-                effective_date_basis=date_basis,
-                source_record_key=None,
-                source_publication_key=None,
-                raw_excerpt={"currency": currency_code, "buying": cells[buy_idx], "selling": cells[sell_idx]},
-                mapping_notes=[],
-            ))
+                effective_date_basis=date_basis
+            )
+            
+            # Context-based category override
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category(expected_category)
+            
+            records.extend(detected_records)
+        
         return records
     
-    def _parse_weighted_table(self, rows) -> list:
-        """Parse weighted average table — date embedded in row 0 header cell."""
-        # Row 0: merged header with date text
-        # Row 1: Buying | Selling sub-header
-        # Row 2+: data
+    def _parse_weighted_table(self, rows, expected_category: str, global_date: Optional[date] = None) -> list:
+        """Parse weighted average table — date embedded in header, or use global_date."""
         if len(rows) < 3:
             return []
-
+        
+        # Row 0: merged header with date
+        # Row 1: Buying | Selling sub-header (only 2 columns)
+        # Row 2+: Currency Code | Currency Name | Buying | Selling (4 columns)
         header_text = rows[0].get_text(" ", strip=True)
-        effective_date = _extract_date(header_text)
+        
+        # Try to extract date from weighted average header first
+        table_specific_date = _extract_date(header_text)
+        
+        # Prefer table-specific date, fall back to global date
+        effective_date = table_specific_date or global_date
         date_basis = "source_published" if effective_date else "collection_date_fallback"
-
+        
         records = []
         for row in rows[2:]:
             cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
             if len(cells) < 4:
                 continue
+            
             currency_code = cells[0].strip()
             currency_name = cells[1].strip() if len(cells) > 1 else None
             if not currency_code:
                 continue
-
-            buying = _safe_rate(cells[2])
-            selling = _safe_rate(cells[3])
-            if buying is None and selling is None:
-                continue
-
-            records.append(AdapterRecord(
-                source_currency_code=currency_code,
+            
+            # Create dict with explicit field names based on table structure
+            # Columns: 0=Currency Code, 1=Currency Name, 2=Buying, 3=Selling
+            row_dict = {
+                "buying": cells[2],
+                "selling": cells[3],
+                "header_text": header_text
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
                 currency_name=currency_name or None,
-                category="weighted_average",
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{cells[2]}/{cells[3]}",
                 effective_date=effective_date,
                 effective_date_basis=date_basis,
-                source_record_key=None,
-                source_publication_key=None,
-                raw_excerpt={"currency": currency_code, "buying": cells[2], "selling": cells[3],
-                             "header_text": header_text},
                 mapping_notes=(
                     ["date_from_weighted_avg_header:source_published"]
                     if effective_date else
                     ["date_missing_from_weighted_avg_header:collection_date_fallback"]
-                ),
-            ))
+                )
+            )
+            
+            # Context-based category override
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category(expected_category)
+            
+            records.extend(detected_records)
+        
         return records
+
+
+def _header_to_field_name(header: str) -> str:
+    """
+    Convert column header to field name for detection.
+    
+    Examples:
+        "Transaction Buying" → "transaction_buying"
+        "Cash Selling" → "cash_selling"
+        "Buying" → "buying"
+        "Selling" → "selling"
+    """
+    # Normalize: lowercase, replace spaces with underscores
+    field = header.lower().strip()
+    field = re.sub(r'\s+', '_', field)
+    # Remove special characters except underscores
+    field = re.sub(r'[^\w_]', '', field)
+    return field
 
 
 def _extract_date(text: str) -> Optional[date]:
@@ -236,8 +267,7 @@ def _extract_date(text: str) -> Optional[date]:
     if not m:
         return None
     date_str = m.group(1).strip()
-    # "October 09, 2026" or "October 9, 2026"
-    parts = re.split(r"[\s,]+", date_str)
+    parts = re.sub(r'[\s,]+', ' ', date_str).split()
     if len(parts) < 3:
         return None
     month_name = parts[0].lower()
@@ -252,52 +282,18 @@ def _extract_date(text: str) -> Optional[date]:
         return None
 
 
-def _find_col(headers: list, candidates: list) -> Optional[int]:
-    for candidate in candidates:
-        for i, h in enumerate(headers):
-            if candidate in h:
-                return i
-    return None
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Backward Compatibility Wrappers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def parse(raw_html: str) -> tuple:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use DashenAdapter().parse().
-    
-    Args:
-        raw_html: Raw HTML string from Dashen Bank website
-        
-    Returns:
-        Tuple of (records, errors) for backward compatibility
-    """
+    """Old function API (for backward compatibility)."""
     adapter = DashenAdapter()
     result = adapter.parse(raw_html)
     return result.records, result.errors
 
 
 def schema_fingerprint(raw_html: str) -> str:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use DashenAdapter().schema_fingerprint().
-    
-    Args:
-        raw_html: Raw HTML string from Dashen Bank website
-        
-    Returns:
-        SHA256 hash of table structure
-    """
+    """Old function API (for backward compatibility)."""
     return DashenAdapter().schema_fingerprint(raw_html)
+
