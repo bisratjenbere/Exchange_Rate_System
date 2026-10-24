@@ -8,17 +8,18 @@ Parse rules:
 - Date in page text: "October 13, 2026" → source_published.
 - Empty selling cell → None.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTableAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "abay_html"
 SOURCE_URL = "https://www.abaybanksc.com/"
@@ -34,17 +35,15 @@ _MONTH_MAP = {
 _TABLE_CATEGORIES = {0: "weighted_average", 1: "cash", 2: "transactional"}
 
 
-class AbayAdapter(HTMLTableAdapter):
+class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
     """
-    Abay Bank adapter.
+    Abay Bank adapter with field detection.
     
-    Parses 3 HTML tables with different rate categories:
-    - Table 0: weighted_average
-    - Table 1: cash
-    - Table 2: transactional
-    
-    Extracts effective date from page text (e.g., "October 13, 2026").
+    Parses 3 HTML tables with different rate categories.
+    Field Structure: Table position determines category context.
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Abay Bank website URL."""
@@ -56,7 +55,7 @@ class AbayAdapter(HTMLTableAdapter):
     
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
         """
-        Extract AdapterRecords from Abay Bank HTML tables.
+        Extract AdapterRecords from Abay Bank HTML tables using field detection.
         
         Args:
             soup: BeautifulSoup parsed HTML
@@ -74,15 +73,15 @@ class AbayAdapter(HTMLTableAdapter):
         date_basis = "source_published" if effective_date else "collection_date_fallback"
         
         # Process each table with its corresponding category
-        for idx, category in _TABLE_CATEGORIES.items():
+        for idx, expected_category in _TABLE_CATEGORIES.items():
             if idx >= len(tables):
-                result.add_error(f"table_{idx}_{category}:missing")
+                result.add_error(f"table_{idx}_{expected_category}:missing")
                 continue
             try:
-                records = self._parse_table(tables[idx], category, effective_date, date_basis)
+                records = self._parse_table(tables[idx], expected_category, effective_date, date_basis)
                 result.records.extend(records)
             except Exception as exc:
-                result.add_error(f"table_{idx}_{category}:{exc}")
+                result.add_error(f"table_{idx}_{expected_category}:{exc}")
         
         return result
     
@@ -101,13 +100,13 @@ class AbayAdapter(HTMLTableAdapter):
                 continue
         return best
     
-    def _parse_table(self, table, category: str, effective_date: Optional[date], date_basis: str) -> list:
+    def _parse_table(self, table, expected_category: str, effective_date: Optional[date], date_basis: str) -> list:
         """
-        Parse Abay exchange rate table.
+        Parse Abay exchange rate table using field detection.
         
         Args:
             table: BeautifulSoup table element
-            category: Exchange rate category (weighted_average, cash, transactional)
+            expected_category: Expected category from table position
             effective_date: Extracted effective date or None
             date_basis: "source_published" or "collection_date_fallback"
             
@@ -123,33 +122,28 @@ class AbayAdapter(HTMLTableAdapter):
             currency_code = cells[0].strip()
             if not currency_code:
                 continue
-            buying = _safe_rate(cells[1])
-            selling = _safe_rate(cells[2])
-            if buying is None and selling is None:
-                continue
-            records.append(AdapterRecord(
-                source_currency_code=currency_code,
-                category=category,
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{cells[1]}/{cells[2]}",
+            
+            # Create dict with generic field names
+            row_dict = {
+                "buying": cells[1],
+                "selling": cells[2],
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
                 effective_date=effective_date,
-                effective_date_basis=date_basis,
-                source_record_key=None,
-                source_publication_key=None,
-                unit_multiplier=1,
-                raw_excerpt={"currency": currency_code, "buying": cells[1], "selling": cells[2]},
-                mapping_notes=[],
-            ))
+                effective_date_basis=date_basis
+            )
+            
+            # Context-based category override: table position determines category
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category(expected_category)
+            
+            records.extend(detected_records)
         return records
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Safely convert raw value to normalized Decimal rate."""
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

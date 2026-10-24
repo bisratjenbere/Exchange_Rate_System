@@ -24,23 +24,22 @@ from typing import Optional
 from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
 from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
 
 ADAPTER_KEY = "cbe_api"
 SOURCE_URL = "https://combanketh.et/cbeapi/daily-exchange-rates/"
 
-_CATEGORY_FIELDS = {
-    "cash": ("cashBuying", "cashSelling"),
-    "transactional": ("transactionalBuying", "transactionalSelling"),
-}
 
-
-class CBEAdapter(JSONAdapter):
+class CBEAdapter(JSONAdapter, FieldStructureMixin):
     """
     Commercial Bank of Ethiopia adapter using JSONAdapter base class.
     
     Parses JSON array of publication records with ExchangeRate arrays.
-    Emits 2 records per currency (cash + transactional).
+    Uses field-structure-based category detection to emit records.
     """
+    
+    # No explicit config needed - field names are self-describing
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return CBE API URL."""
@@ -140,7 +139,7 @@ def _parse_publication(pub: dict) -> list:
 
 
 def _parse_er_item(item: dict, pub_id: Optional[str], effective_date: Optional[date]) -> list:
-    """Parse one ExchangeRate item into up to 2 AdapterRecords (cash + transactional)."""
+    """Parse one ExchangeRate item using field detection."""
     if not isinstance(item, dict):
         return []
 
@@ -155,57 +154,19 @@ def _parse_er_item(item: dict, pub_id: Optional[str], effective_date: Optional[d
     if not currency_code:
         return []
 
-    records = []
-    for category, (buy_field, sell_field) in _CATEGORY_FIELDS.items():
-        buy_present = buy_field in item
-        sell_present = sell_field in item
-        if buy_present != sell_present:
-            # One field present, one absent — schema changed
-            raise ValueError(
-                f"CBE: ExchangeRate item has '{buy_field if buy_present else sell_field}' "
-                f"but missing '{sell_field if buy_present else buy_field}' "
-                f"for currency {currency_code!r}"
-            )
-        if not buy_present and not sell_present:
-            # Both fields entirely absent — schema changed
-            raise ValueError(
-                f"CBE: ExchangeRate item missing expected fields "
-                f"'{buy_field}'/'{sell_field}' for currency {currency_code!r}"
-            )
-
-        buying = _safe_rate(item.get(buy_field))
-        selling = _safe_rate(item.get(sell_field))
-
-        if buying is None and selling is None:
-            # Both zero/null → not offered for this category; skip
-            continue
-
-        # source_record_key: item id + category suffix for uniqueness
-        src_key = f"{item_id}:{category}" if item_id else None
-
-        records.append(AdapterRecord(
-            source_currency_code=currency_code,
-            currency_name=currency_name,
-            category=category,
-            buying_rate=buying,
-            selling_rate=selling,
-            source_rate_text=f"{item.get(buy_field)}/{item.get(sell_field)}",
-            effective_date=effective_date,
-            effective_date_basis="source_published",
-            source_record_key=src_key,
-            source_publication_key=pub_id,
-            quote_currency_code=None,   # TO VERIFY: ETB implied
-            unit_multiplier=1,
-            raw_excerpt={
-                "id": item_id,
-                "pub_id": pub_id,
-                "currency_code": currency_code,
-                buy_field: item.get(buy_field),
-                sell_field: item.get(sell_field),
-            },
-            mapping_notes=["zero_equals_not_offered:TO_VERIFY"],
-        ))
-
+    # Use field detection to detect categories and emit records
+    adapter = CBEAdapter()
+    records = adapter.detect_and_emit(
+        item,
+        currency=currency_code,
+        currency_name=currency_name,
+        effective_date=effective_date,
+        effective_date_basis="source_published",
+        source_record_id=item_id,
+        source_publication_id=pub_id,
+        mapping_notes=["zero_equals_not_offered:TO_VERIFY"]
+    )
+    
     return records
 
 

@@ -5,21 +5,21 @@ Parse rules:
 - No table. Rates in page text pattern:
   "CURR : CODE Buying Rate : NNN|No Trade Selling Rate : NNN|No Trade"
 - Date in text: "EXCHANGE RATE FOR : DD/MM/YYYY" → source_published.
-- Single buying/selling pair — category UNKNOWN (unconfirmed).
+- Single buying/selling pair — defaults to transactional category.
 - "No Trade" → None.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
-import hashlib
 import re
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTextAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 # Module-level constants for backward compatibility
 ADAPTER_KEY = "ahadu_html"
@@ -33,13 +33,15 @@ _RATE_RE = re.compile(
 )
 
 
-class AhaduAdapter(HTMLTextAdapter):
+class AhaduAdapter(FieldStructureMixin, HTMLTextAdapter):
     """
-    Ahadu Bank adapter using HTMLTextAdapter base class.
+    Ahadu Bank adapter with field detection.
     
     Type G adapter that extracts rates from text patterns.
-    Requires category parameter (Type G characteristic).
+    Field Structure: Generic fields → transactional (context-based)
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Ahadu Bank source URL."""
@@ -50,25 +52,22 @@ class AhaduAdapter(HTMLTextAdapter):
         return ADAPTER_KEY
     
     def requires_category(self) -> bool:
-        """Type G adapter requires category parameter."""
-        return True
+        """No longer requires category parameter - uses default."""
+        return False
     
     def _extract_from_text(self, text: str, soup: BeautifulSoup, **options) -> ParseResult:
         """
-        Extract AdapterRecords from normalized HTML text using regex patterns.
+        Extract AdapterRecords from normalized HTML text using regex patterns and field detection.
         
         Args:
             text: Normalized text with single-space separation
             soup: BeautifulSoup parsed HTML (unused for Ahadu)
-            **options: Must contain 'category' parameter
+            **options: Optional parameters (category no longer required)
             
         Returns:
             ParseResult containing extracted records and any errors
         """
         result = ParseResult()
-        
-        # Extract category from options
-        category = options.get("category", "UNKNOWN")
         
         # Extract effective date from text
         effective_date = _extract_date(text)
@@ -78,27 +77,28 @@ class AhaduAdapter(HTMLTextAdapter):
         for m in _RATE_RE.finditer(text):
             code = m.group(1).upper()
             try:
-                buying = _safe_rate(m.group(2))
-                selling = _safe_rate(m.group(3))
+                # Create dict with generic field names
+                row_dict = {
+                    "buying": m.group(2),
+                    "selling": m.group(3),
+                }
                 
-                # Skip currencies with no tradeable rates
-                if buying is None and selling is None:
-                    continue
-                
-                result.records.append(AdapterRecord(
-                    source_currency_code=code,
-                    category=category,
-                    buying_rate=buying,
-                    selling_rate=selling,
-                    source_rate_text=f"{m.group(2)}/{m.group(3)}",
+                # Use field detection
+                detected_records = self.detect_and_emit(
+                    data=row_dict,
+                    currency=code,
                     effective_date=effective_date,
                     effective_date_basis=date_basis,
-                    source_record_key=None,
-                    source_publication_key=None,
-                    unit_multiplier=1,
-                    raw_excerpt={"currency": code, "buying": m.group(2), "selling": m.group(3)},
-                    mapping_notes=["category_unknown:single_pair_unconfirmed"],
-                ))
+                    mapping_notes=["single_field_pair:transactional_default"]
+                )
+                
+                # Context-based category override: single pair = transactional
+                for rec in detected_records:
+                    if rec.category == 'UNKNOWN':
+                        rec.category = normalize_category("transactional")
+                
+                result.records.extend(detected_records)
+                
             except Exception as exc:
                 result.add_error(f"currency:{code}:{exc}")
         
@@ -115,12 +115,14 @@ class AhaduAdapter(HTMLTextAdapter):
             SHA256 hex digest of structural markers
         """
         try:
+            import hashlib
             soup = BeautifulSoup(raw_content, "html.parser")
             text = " ".join(soup.get_text(" ", strip=True).split())
             markers = ["CURR", "Buying Rate", "Selling Rate"]
             present = [m for m in markers if m in text]
             return hashlib.sha256(str(present).encode()).hexdigest()
         except Exception:
+            import hashlib
             return hashlib.sha256(b"ahadu:unparseable").hexdigest()
 
 
@@ -146,24 +148,6 @@ def _extract_date(text: str) -> Optional[date]:
         return None
 
 
-def _safe_rate(raw: str) -> Optional[Decimal]:
-    """
-    Safely convert raw rate string to Decimal.
-    
-    Args:
-        raw: Raw rate value (may be number or "No Trade")
-        
-    Returns:
-        Normalized Decimal rate or None if "No Trade" or invalid
-    """
-    if not raw or raw.strip().lower() == "no trade":
-        return None
-    try:
-        return normalize_rate(raw.strip())
-    except ValueError:
-        return None
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Backward Compatibility Layer
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -172,18 +156,18 @@ def _safe_rate(raw: str) -> Optional[Decimal]:
 _adapter = AhaduAdapter()
 
 
-def parse(raw_html: str, category: str = "UNKNOWN") -> tuple:
+def parse(raw_html: str, category: str = None) -> tuple:
     """
     Backward compatibility wrapper for function-based parse interface.
     
     Args:
         raw_html: Raw HTML string from Ahadu Bank
-        category: Rate category (defaults to "UNKNOWN")
+        category: Optional category (deprecated, now uses default)
         
     Returns:
         Tuple of (records, errors) for backward compatibility
     """
-    result = _adapter.parse(raw_html, category=category)
+    result = _adapter.parse(raw_html)
     return result.records, result.errors
 
 

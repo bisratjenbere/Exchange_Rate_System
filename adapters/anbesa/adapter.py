@@ -21,6 +21,8 @@ Date: extracted from page text near "Applicable" or "Date" heading.
 
 Parse rules:
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import hashlib
 import re
@@ -32,6 +34,8 @@ from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTextAdapter, ParseResult
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "anbesa_browser"
 SOURCE_URL = "https://anbesabank.com/"
@@ -112,8 +116,14 @@ def fetch_raw(source_url: str, user_agent: str, ssl_verify: bool) -> tuple:
 # ADAPTER CLASS
 # ============================================================================
 
-class AnbesaAdapter(HTMLTextAdapter):
-    """Anbesa Bank adapter using Playwright browser automation."""
+class AnbesaAdapter(FieldStructureMixin, HTMLTextAdapter):
+    """
+    Anbesa Bank adapter using Playwright browser automation.
+    
+    Uses field detection for automatic category discovery from table headers.
+    """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -132,7 +142,7 @@ class AnbesaAdapter(HTMLTextAdapter):
         tables = soup.find_all("table")
         for table in tables:
             try:
-                records = _parse_table(table, effective_date, date_basis)
+                records = _parse_table(table, effective_date, date_basis, self)
                 result.records.extend(records)
             except Exception as exc:
                 result.add_error(f"table:{exc}")
@@ -141,7 +151,7 @@ class AnbesaAdapter(HTMLTextAdapter):
         if not result.records:
             for block in soup.find_all("div", class_=re.compile(r"rate|exchange|currency", re.I)):
                 try:
-                    records = _parse_div_block(block, effective_date, date_basis)
+                    records = _parse_div_block(block, effective_date, date_basis, self)
                     result.records.extend(records)
                 except Exception as exc:
                     result.add_error(f"div:{exc}")
@@ -164,8 +174,8 @@ class AnbesaAdapter(HTMLTextAdapter):
 # HELPER FUNCTIONS
 # ============================================================================
 
-def _parse_table(table, effective_date, date_basis) -> list:
-    """Parse a table element to extract rate records."""
+def _parse_table(table, effective_date, date_basis, adapter_instance) -> list:
+    """Parse a table element to extract rate records using field detection."""
     rows = table.find_all("tr")
     if len(rows) < 2:
         return []
@@ -194,18 +204,18 @@ def _parse_table(table, effective_date, date_basis) -> list:
 
         if has_cash and has_trans and len(cells) >= 5:
             # Cash Buying | Cash Selling | Trans Buying | Trans Selling
-            _add(records, code, "cash", cells[1], cells[2], effective_date, date_basis)
-            _add(records, code, "transactional", cells[3], cells[4], effective_date, date_basis)
+            _add_with_detection(records, code, "cash", cells[1], cells[2], effective_date, date_basis, adapter_instance)
+            _add_with_detection(records, code, "transactional", cells[3], cells[4], effective_date, date_basis, adapter_instance)
         elif has_weighted and len(cells) >= 3:
-            _add(records, code, "weighted_average", cells[1], cells[2], effective_date, date_basis)
+            _add_with_detection(records, code, "weighted_average", cells[1], cells[2], effective_date, date_basis, adapter_instance)
         elif len(cells) >= 3:
-            _add(records, code, "transactional", cells[1], cells[2], effective_date, date_basis)
+            _add_with_detection(records, code, "transactional", cells[1], cells[2], effective_date, date_basis, adapter_instance)
 
     return records
 
 
-def _parse_div_block(block, effective_date, date_basis) -> list:
-    """Fallback: parse div-based rate layout."""
+def _parse_div_block(block, effective_date, date_basis, adapter_instance) -> list:
+    """Fallback: parse div-based rate layout using field detection."""
     text = block.get_text(" ", strip=True)
     # Look for pattern: CODE Name buy sell
     matches = re.findall(
@@ -214,30 +224,34 @@ def _parse_div_block(block, effective_date, date_basis) -> list:
     )
     records = []
     for code, buy_text, sell_text in matches:
-        _add(records, code, "transactional", buy_text, sell_text, effective_date, date_basis)
+        _add_with_detection(records, code, "transactional", buy_text, sell_text, effective_date, date_basis, adapter_instance)
     return records
 
 
-def _add(records, code, category, buy_text, sell_text, eff_date, date_basis):
-    """Helper to add a record to the list."""
-    buying = _safe_rate(buy_text)
-    selling = _safe_rate(sell_text)
-    if buying is None and selling is None:
-        return
-    records.append(AdapterRecord(
-        source_currency_code=code,
-        category=category,
-        buying_rate=buying,
-        selling_rate=selling,
-        source_rate_text=f"{buy_text}/{sell_text}",
+def _add_with_detection(records, code, expected_category, buy_text, sell_text, eff_date, date_basis, adapter_instance):
+    """Helper to add a record using field detection."""
+    # Create dict with generic field names
+    row_dict = {
+        "buying": buy_text,
+        "selling": sell_text,
+    }
+    
+    # Use field detection
+    detected_records = adapter_instance.detect_and_emit(
+        data=row_dict,
+        currency=code,
         effective_date=eff_date,
-        effective_date_basis=date_basis,
-        source_record_key=f"{eff_date}:{code}:{category}",
-        source_publication_key=str(eff_date) if eff_date else None,
-        unit_multiplier=1,
-        raw_excerpt={"currency": code, "buying": buy_text, "selling": sell_text},
-        mapping_notes=[],
-    ))
+        effective_date_basis=date_basis
+    )
+    
+    # Context-based category override: table header/position determines category
+    for rec in detected_records:
+        if rec.category == 'UNKNOWN':
+            rec.category = normalize_category(expected_category)
+        rec.source_record_key = f"{eff_date}:{code}:{rec.category}"
+        rec.source_publication_key = str(eff_date) if eff_date else None
+    
+    records.extend(detected_records)
 
 
 def _extract_code(raw: str) -> Optional[str]:

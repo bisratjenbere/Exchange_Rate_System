@@ -7,18 +7,18 @@ Parse rules:
 - Each section has a sub-header row then data rows.
 - Currency code only (no name). Columns: Currency type | Buying Rate | Selling Rate.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
-import hashlib
 import re
 from datetime import date
-from decimal import Decimal
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTableAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "boa_html"
 SOURCE_URL = "https://www.bankofabyssinia.com/exchange-rate-2/"
@@ -32,18 +32,16 @@ _MONTH_MAP = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
-_SECTION_MAP = {
-    "cash": "cash",
-    "transactional": "transactional",
-}
 
-
-class BOAAdapter(HTMLTableAdapter):
+class BOAAdapter(FieldStructureMixin, HTMLTableAdapter):
     """
-    Bank of Abyssinia adapter using HTMLTableAdapter base class.
+    Bank of Abyssinia adapter with field detection.
     
     Type E adapter with section headers dividing a single table into cash and transactional sections.
+    Field Structure: Generic fields + section-based category context
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return BOA website URL."""
@@ -55,7 +53,7 @@ class BOAAdapter(HTMLTableAdapter):
     
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
         """
-        Extract AdapterRecords from BOA HTML table.
+        Extract AdapterRecords from BOA HTML table using field detection.
         
         Args:
             soup: BeautifulSoup parsed HTML
@@ -72,83 +70,96 @@ class BOAAdapter(HTMLTableAdapter):
             return result
         
         try:
-            records, errors = _parse_table(tables[0])
+            records = self._parse_table(tables[0])
             result.records.extend(records)
-            for error in errors:
-                result.add_error(error)
         except Exception as exc:
             result.add_error(f"table_0:{exc}")
         
         return result
+    
+    def _parse_table(self, table) -> list:
+        """Parse BOA single table with section headers using field detection."""
+        rows = table.find_all("tr")
+        effective_date = None
+        current_category = None
+        records = []
 
-
-def _parse_table(table) -> tuple:
-    """Parse BOA single table with section headers."""
-    rows = table.find_all("tr")
-    effective_date = None
-    current_category = None
-    records, errors = [], []
-
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if not cells or all(c == "" for c in cells):
-            continue
-
-        text = " ".join(cells).strip()
-
-        # Date row
-        if effective_date is None:
-            d = _parse_date(text)
-            if d:
-                effective_date = d
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if not cells or all(c == "" for c in cells):
                 continue
 
-        # Section header row
-        cat = _detect_section(text)
-        if cat:
-            current_category = cat
-            continue
+            text = " ".join(cells).strip()
 
-        # Sub-header row (contains "Buying" / "Selling" labels)
-        if any("buying" in c.lower() or "selling" in c.lower() for c in cells):
-            continue
+            # Date row
+            if effective_date is None:
+                d = _parse_date(text)
+                if d:
+                    effective_date = d
+                    continue
 
-        # Data row
-        if current_category is None:
-            continue
-        currency = cells[0].strip()
-        if not currency or len(cells) < 3:
-            continue
-        buying = _safe_rate(cells[1])
-        selling = _safe_rate(cells[2])
-        if buying is None and selling is None:
-            continue
+            # Section header row
+            cat = _detect_section(text)
+            if cat:
+                current_category = cat
+                continue
 
-        date_basis = "source_published" if effective_date else "collection_date_fallback"
-        records.append(AdapterRecord(
-            source_currency_code=currency,
-            category=current_category,
-            buying_rate=buying,
-            selling_rate=selling,
-            source_rate_text=f"{cells[1]}/{cells[2]}",
-            effective_date=effective_date,
-            effective_date_basis=date_basis,
-            source_record_key=None,
-            source_publication_key=None,
-            unit_multiplier=1,
-            raw_excerpt={"currency": currency, "buying": cells[1], "selling": cells[2]},
-            mapping_notes=["ssl_verify_false:access_finding_recorded"],
-        ))
+            # Sub-header row (contains "Buying" / "Selling" labels)
+            if any("buying" in c.lower() or "selling" in c.lower() for c in cells):
+                continue
 
-    return records, errors
+            # Data row
+            if current_category is None:
+                continue
+            currency = cells[0].strip()
+            if not currency or len(cells) < 3:
+                continue
+            
+            # Create dict with generic field names
+            row_dict = {
+                "buying": cells[1],
+                "selling": cells[2],
+            }
+            
+            # Use field detection
+            date_basis = "source_published" if effective_date else "collection_date_fallback"
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=["ssl_verify_false:access_finding_recorded"]
+            )
+            
+            # Context-based category override: section header determines category
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category(current_category)
+            
+            records.extend(detected_records)
+
+        return records
 
 
 def _detect_section(text: str) -> Optional[str]:
-    """Detect section header (Cash Rates / Transactional Rates)."""
-    t = text.lower()
-    for key, cat in _SECTION_MAP.items():
-        if key in t and "rate" in t:
-            return cat
+    """
+    Detect section header using category normalizer.
+    
+    Handles variations like:
+    - "Cash Rates" → cash
+    - "Transaction Rates" → transactional  
+    - "Transactional Rates" → transactional
+    """
+    if not text or "rate" not in text.lower():
+        return None
+    
+    # Try to normalize the text to get a category
+    category = normalize_category(text)
+    
+    # Only return if it's a recognized category (not UNKNOWN)
+    if category and category != "UNKNOWN":
+        return category
+    
     return None
 
 
@@ -162,14 +173,6 @@ def _parse_date(text: str) -> Optional[date]:
         return None
     try:
         return date(int(m.group(3)), month, int(m.group(2)))
-    except ValueError:
-        return None
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Safely convert raw value to normalized Decimal rate."""
-    try:
-        return normalize_rate(raw)
     except ValueError:
         return None
 

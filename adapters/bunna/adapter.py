@@ -9,33 +9,27 @@ Parse rules:
 - AVERAGE columns may contain "..." (JS-rendered) → treated as None.
 - No date → collection_date_fallback → identity_status=ambiguous.
 - Partial failure: returns (records, errors). Never raises.
-"""
-import hashlib
-from decimal import Decimal
-from typing import Optional
 
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
+"""
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTableAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
 
 ADAPTER_KEY = "bunna_html"
 SOURCE_URL = "https://bunnabanksc.com/foreign-exchange/"
 
-_CATEGORIES = [
-    ("cash", 2, 3),
-    ("transactional", 4, 5),
-    ("weighted_average", 6, 7),
-]
 
-
-class BunnaAdapter(HTMLTableAdapter):
+class BunnaAdapter(FieldStructureMixin, HTMLTableAdapter):
     """
-    Bunna Bank adapter using HTMLTableAdapter base class.
+    Bunna Bank adapter with field detection.
     
-    Type E adapter with wide table containing all three categories (cash, transactional, weighted_average).
+    Type E adapter with wide table containing all three categories.
+    Field Structure: Columns → dict with category prefixes
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Bunna Bank website URL."""
@@ -47,7 +41,7 @@ class BunnaAdapter(HTMLTableAdapter):
     
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
         """
-        Extract AdapterRecords from Bunna HTML table.
+        Extract AdapterRecords from Bunna HTML table using field detection.
         
         Args:
             soup: BeautifulSoup parsed HTML
@@ -64,57 +58,49 @@ class BunnaAdapter(HTMLTableAdapter):
             return result
         
         try:
-            records = _parse_wide_table(tables[0])
+            records = self._parse_wide_table(tables[0])
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0:{exc}")
         
         return result
-
-
-def _parse_wide_table(table) -> list:
-    """Parse Bunna's wide table with all three categories in columns."""
-    rows = [r for r in table.find_all("tr") if r.find("td")]
-    records = []
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 6:
-            continue
-        currency_name = cells[0].strip()
-        currency_code = cells[1].strip()
-        if not currency_code:
-            continue
-        for category, bi, si in _CATEGORIES:
-            if len(cells) <= si:
+    
+    def _parse_wide_table(self, table) -> list:
+        """Parse Bunna's wide table with all three categories in columns using field detection."""
+        rows = [r for r in table.find_all("tr") if r.find("td")]
+        records = []
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 6:
                 continue
-            buying = _safe_rate(cells[bi])
-            selling = _safe_rate(cells[si])
-            if buying is None and selling is None:
+            currency_name = cells[0].strip()
+            currency_code = cells[1].strip()
+            if not currency_code:
                 continue
-            records.append(AdapterRecord(
-                source_currency_code=currency_code,
+            
+            # Create dict with explicit category prefixes
+            row_dict = {
+                "cash_buying": cells[2],
+                "cash_selling": cells[3],
+                "transactional_buying": cells[4],
+                "transactional_selling": cells[5],
+            }
+            if len(cells) > 7:
+                row_dict["weighted_average_buying"] = cells[6]
+                row_dict["weighted_average_selling"] = cells[7]
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
                 currency_name=currency_name or None,
-                category=category,
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{cells[bi]}/{cells[si]}",
                 effective_date=None,
                 effective_date_basis="collection_date_fallback",
-                source_record_key=None,
-                source_publication_key=None,
-                unit_multiplier=1,
-                raw_excerpt={"currency": currency_code, "buying": cells[bi], "selling": cells[si]},
-                mapping_notes=["date_ambiguous:no_source_published_date", "avg_cols_may_be_js_rendered:TO_VERIFY"],
-            ))
-    return records
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Safely convert raw value to normalized Decimal rate."""
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
+                mapping_notes=["date_ambiguous:no_source_published_date", "avg_cols_may_be_js_rendered:TO_VERIFY"]
+            )
+            
+            records.extend(detected_records)
+        return records
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

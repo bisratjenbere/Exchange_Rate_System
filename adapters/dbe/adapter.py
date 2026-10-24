@@ -6,6 +6,8 @@ Parse rules:
 - Table 1: same structure but empty (JS-rendered) — skip.
 - Date from tablepress-table-description span → source_published → CONFIRMED identity.
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import date
@@ -16,6 +18,8 @@ from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTableAdapter, ParseResult
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 from pipeline.normalize import normalize_rate
 
 ADAPTER_KEY = "dbe_html"
@@ -28,14 +32,15 @@ _MONTHS = {
 }
 
 
-class DBEAdapter(HTMLTableAdapter):
+class DBEAdapter(FieldStructureMixin, HTMLTableAdapter):
     """
     Development Bank of Ethiopia adapter.
     
     Type F adapter (requires category parameter).
-    Parses HTML table with currency codes and exchange rates.
-    Extracts effective date from tablepress-table-description span.
+    Uses field detection for automatic category discovery.
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return DBE website URL."""
@@ -69,6 +74,8 @@ class DBEAdapter(HTMLTableAdapter):
         
         # Parse first table (second table is JS-rendered and empty)
         try:
+            # Pass self reference to helper via table object
+            tables[0]._adapter_instance = self
             records = self._parse_table(tables[0], category, effective_date)
             result.records.extend(records)
         except Exception as exc:
@@ -117,24 +124,28 @@ class DBEAdapter(HTMLTableAdapter):
             currency_code = cells[1].strip()
             if not currency_code:
                 continue
-            buying = _safe_rate(cells[2])
-            selling = _safe_rate(cells[3])
-            if buying is None and selling is None:
-                continue
-            records.append(AdapterRecord(
-                source_currency_code=currency_code,
-                category=category,
-                buying_rate=buying,
-                selling_rate=selling,
-                source_rate_text=f"{cells[2]}/{cells[3]}",
+            
+            # Create dict with generic field names
+            row_dict = {
+                "buying": cells[2],
+                "selling": cells[3],
+            }
+            
+            # Use field detection (self is passed through table parameter)
+            detected_records = table._adapter_instance.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
                 effective_date=effective_date,
                 effective_date_basis=date_basis,
-                source_record_key=None,
-                source_publication_key=None,
-                unit_multiplier=1,
-                raw_excerpt={"currency": currency_code, "buying": cells[2], "selling": cells[3]},
-                mapping_notes=["category_unknown:single_pair_no_label"],
-            ))
+                mapping_notes=["category_unknown:single_pair_no_label"]
+            )
+            
+            # Context-based category override: parameter-provided category
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category(category)
+            
+            records.extend(detected_records)
         return records
 
 

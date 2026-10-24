@@ -1,16 +1,17 @@
 """
 adapters/amhara/adapter.py — Amhara Bank.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import re
 from datetime import datetime, date
-from decimal import Decimal
 from typing import Optional
 
 from bs4 import BeautifulSoup
 
 from adapters.base import HTMLTableAdapter, ParseResult
-from domain.records import AdapterRecord
-from pipeline.normalize import normalize_rate
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "amhara_html"
 SOURCE_URL = "https://www.amharabank.com/daily-exchange-rate/"
@@ -19,14 +20,15 @@ SSL_VERIFY = False
 _CODE_RE = re.compile(r"\(\s*([A-Z]{3})\s*\)", re.IGNORECASE)
 
 
-class AmharaAdapter(HTMLTableAdapter):
+class AmharaAdapter(FieldStructureMixin, HTMLTableAdapter):
     """
-    Amhara Bank adapter.
+    Amhara Bank adapter with field detection.
     
     Type D adapter (2-table HTML with shared date).
-    Parses HTML with 2 tables: cash+transactional, weighted_average.
-    All tables share the same effective date extracted from page text.
+    Field Structure: Table cells → dict with category prefixes
     """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return Amhara Bank website URL."""
@@ -38,7 +40,7 @@ class AmharaAdapter(HTMLTableAdapter):
     
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
         """
-        Extract AdapterRecords from Amhara Bank HTML tables.
+        Extract AdapterRecords from Amhara Bank HTML tables using field detection.
         
         Args:
             soup: BeautifulSoup parsed HTML
@@ -61,7 +63,7 @@ class AmharaAdapter(HTMLTableAdapter):
         
         # Parse table 0 — cash + transactional
         try:
-            records = _parse_cash_txn(tables[0], effective_date, date_basis)
+            records = self._parse_cash_txn(tables[0], effective_date, date_basis)
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0_cash_txn:{exc}")
@@ -71,12 +73,81 @@ class AmharaAdapter(HTMLTableAdapter):
             result.add_error("table_1_weighted_avg:missing")
         else:
             try:
-                records = _parse_weighted(tables[1], effective_date, date_basis)
+                records = self._parse_weighted(tables[1], effective_date, date_basis)
                 result.records.extend(records)
             except Exception as exc:
                 result.add_error(f"table_1_weighted_avg:{exc}")
         
         return result
+    
+    def _parse_cash_txn(self, table, effective_date, date_basis) -> list:
+        """Parse cash + transactional table using field detection."""
+        rows = [r for r in table.find_all("tr") if r.find("td")]
+        records = []
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 6:
+                continue
+            currency_code, currency_name = _parse_name_code(cells[1])
+            if not currency_code:
+                continue
+            
+            # Create dict with category prefixes
+            row_dict = {
+                "cash_buying": cells[2],
+                "cash_selling": cells[3],
+                "transactional_buying": cells[4],
+                "transactional_selling": cells[5],
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
+                currency_name=currency_name,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=["ssl_verify_false:access_finding_recorded"]
+            )
+            
+            records.extend(detected_records)
+        return records
+    
+    def _parse_weighted(self, table, effective_date, date_basis) -> list:
+        """Parse weighted average table using field detection."""
+        rows = [r for r in table.find_all("tr") if r.find("td")]
+        records = []
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if len(cells) < 4:
+                continue
+            currency_code, currency_name = _parse_name_code(cells[1])
+            if not currency_code:
+                continue
+            
+            # Create dict with generic field names
+            row_dict = {
+                "buying": cells[2],
+                "selling": cells[3],
+            }
+            
+            # Use field detection
+            detected_records = self.detect_and_emit(
+                data=row_dict,
+                currency=currency_code,
+                currency_name=currency_name,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=["ssl_verify_false:access_finding_recorded"]
+            )
+            
+            # Context-based category override: this table is weighted_average
+            for rec in detected_records:
+                if rec.category == 'UNKNOWN':
+                    rec.category = normalize_category("weighted_average")
+            
+            records.extend(detected_records)
+        return records
 
 
 def _parse_date(soup) -> Optional[date]:
@@ -93,60 +164,6 @@ def _parse_date(soup) -> Optional[date]:
     return None
 
 
-def _parse_cash_txn(table, effective_date, date_basis) -> list:
-    """Parse cash + transactional table (table 0)."""
-    rows = [r for r in table.find_all("tr") if r.find("td")]
-    records = []
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 6:
-            continue
-        currency_code, currency_name = _parse_name_code(cells[1])
-        if not currency_code:
-            continue
-        for category, bi, si in [("cash", 2, 3), ("transactional", 4, 5)]:
-            buying, selling = _safe_rate(cells[bi]), _safe_rate(cells[si])
-            if buying is None and selling is None:
-                continue
-            records.append(_make_record(currency_code, currency_name, category, buying, selling, 
-                                       cells[bi], cells[si], effective_date, date_basis))
-    return records
-
-
-def _parse_weighted(table, effective_date, date_basis) -> list:
-    """Parse weighted average table (table 1)."""
-    rows = [r for r in table.find_all("tr") if r.find("td")]
-    records = []
-    for row in rows:
-        cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-        if len(cells) < 4:
-            continue
-        currency_code, currency_name = _parse_name_code(cells[1])
-        if not currency_code:
-            continue
-        buying, selling = _safe_rate(cells[2]), _safe_rate(cells[3])
-        if buying is None and selling is None:
-            continue
-        records.append(_make_record(currency_code, currency_name, "weighted_average", buying, selling,
-                                    cells[2], cells[3], effective_date, date_basis))
-    return records
-
-
-def _make_record(code, name, category, buying, selling, buy_text, sell_text, eff_date, date_basis):
-    """Create AdapterRecord from extracted data."""
-    return AdapterRecord(
-        source_currency_code=code, currency_name=name, category=category,
-        buying_rate=buying, selling_rate=selling,
-        source_rate_text=f"{buy_text}/{sell_text}",
-        effective_date=eff_date, effective_date_basis=date_basis,
-        source_record_key=None,
-        source_publication_key=str(eff_date) if eff_date else None,
-        unit_multiplier=1,
-        raw_excerpt={"currency": code, "buying": buy_text, "selling": sell_text},
-        mapping_notes=["ssl_verify_false:access_finding_recorded"],
-    )
-
-
 def _parse_name_code(text: str) -> tuple:
     """Extract currency code from 'Currency Name (USD)' format."""
     m = _CODE_RE.search(text)
@@ -156,14 +173,6 @@ def _parse_name_code(text: str) -> tuple:
         return code, name or None
     text = text.strip()
     return (text, None) if text else ("", None)
-
-
-def _safe_rate(raw) -> Optional[Decimal]:
-    """Safely convert raw value to normalized Decimal rate."""
-    try:
-        return normalize_rate(raw)
-    except ValueError:
-        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -12,6 +12,9 @@ Parse rules (ADR-006 §6, mapping doc, ADR-013):
 - ADR-013: updatedAt (date part only) → effective_date, basis=source_inferred → identity=derived.
 - source_record_key = str(id) — row number, KNOWN not VERIFIED.
 
+MIGRATION NOTE: Migrated to use FieldStructureMixin for automatic category detection.
+Field pattern: Prefix-based (transactionBuying/Selling, weightedBuying/Selling).
+
 No network calls in parse(). fetch() is a thin wrapper kept separate.
 """
 import hashlib
@@ -22,6 +25,8 @@ from typing import Optional
 
 from adapters.base import JSONAdapter, ParseResult
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 from pipeline.normalize import normalize_rate
 
 ADAPTER_KEY = "adib_api"
@@ -29,13 +34,24 @@ SOURCE_URL = "https://api.addisbanksc.com/api/exchange-rates"
 ETB_ROW_ID = 1  # quote currency row — always skip
 
 
-class ADIBAdapter(JSONAdapter):
+class ADIBAdapter(FieldStructureMixin, JSONAdapter):
     """
-    Addis International Bank adapter using JSONAdapter base class.
+    Addis International Bank adapter using JSONAdapter base class with field detection.
     
     Parses JSON array with wide rows containing multiple rate categories.
-    Emits 0-2 records per currency row (transactional + weighted_average).
+    Uses FieldStructureMixin to automatically detect and emit records based on field structure.
+    
+    Field Structure: Suffix-based pattern (e.g., transactionBuying, weightedSelling, etc.)
+    The detector automatically discovers ANY category with Buying/Selling suffixes,
+    making the adapter future-proof if the bank adds new categories.
+    
+    Known categories: transactional, weighted_average
+    Future categories: Will be detected automatically if they follow the pattern
     """
+    
+    # Empty config - let field detector discover all categories automatically
+    # This makes the adapter resilient to new categories (e.g., if bank adds cashBuying/cashSelling)
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         """Return ADIB API URL."""
@@ -47,7 +63,7 @@ class ADIBAdapter(JSONAdapter):
     
     def _process_data(self, data, **options) -> ParseResult:
         """
-        Extract AdapterRecords from parsed JSON data.
+        Extract AdapterRecords from parsed JSON data using field detection.
         
         Args:
             data: Parsed JSON (should be list of currency rows)
@@ -64,12 +80,44 @@ class ADIBAdapter(JSONAdapter):
                 f"ADIB: expected JSON array at top level, got {type(data).__name__}"
             )
         
-        records = []
-        for row in data:
-            records.extend(_parse_row(row))
-        
         result = ParseResult()
-        result.records = records
+        
+        for row in data:
+            # Skip ETB row (quote currency)
+            if not isinstance(row, dict) or row.get("id") == ETB_ROW_ID:
+                continue
+            
+            currency = str(row.get("currency", "")).strip()
+            if not currency:
+                continue
+            
+            # ADR-013: updatedAt date part → source_inferred effective_date
+            effective_date = _parse_updated_at(row.get("updatedAt"))
+            date_basis = "source_inferred" if effective_date else "collection_date_fallback"
+            
+            # Use field detection to automatically emit records based on field structure
+            detected_records = self.detect_and_emit(
+                data=row,
+                currency=currency,
+                source_record_id=str(row.get("id")) if row.get("id") is not None else None,
+                effective_date=effective_date,
+                effective_date_basis=date_basis,
+                mapping_notes=[
+                    "plain_buying_selling_skipped:category_unconfirmed",
+                    "updatedAt_as_source_inferred:ADR-013"
+                ]
+            )
+            
+            # Filter out UNKNOWN categories (plain buying/selling - category unconfirmed per ADR-006)
+            # These are detected but skipped per original adapter behavior
+            confirmed_records = [r for r in detected_records if r.category != 'UNKNOWN']
+            result.records.extend(confirmed_records)
+            
+            # Log if we skipped any UNKNOWN records (for observability)
+            skipped = len(detected_records) - len(confirmed_records)
+            if skipped > 0:
+                result.add_warning(f"{currency}: skipped {skipped} UNKNOWN category record(s)")
+        
         return result
     
     def schema_fingerprint(self, raw_content: str) -> str:
@@ -110,76 +158,6 @@ def parse(raw_json: str) -> list:
         raise ValueError(result.errors[0])
     
     return result.records
-
-
-def _parse_row(row: dict) -> list:
-    """Convert one source row into 0–2 AdapterRecords."""
-    if not isinstance(row, dict):
-        return []
-
-    row_id = row.get("id")
-    if row_id == ETB_ROW_ID:
-        return []  # quote currency — skip
-
-    currency = str(row.get("currency", "")).strip()
-    if not currency:
-        return []
-
-    # ADR-013: updatedAt date part → source_inferred effective_date
-    effective_date = _parse_updated_at(row.get("updatedAt"))
-    date_basis = "source_inferred" if effective_date else "collection_date_fallback"
-
-    records = []
-
-    # ── transactional ─────────────────────────────────────────────────────────
-    txn_buy = _safe_rate(row.get("transactionBuying"))
-    txn_sell = _safe_rate(row.get("transactionSelling"))
-    if txn_buy is not None or txn_sell is not None:
-        records.append(AdapterRecord(
-            source_currency_code=currency,
-            category="transactional",
-            buying_rate=txn_buy,
-            selling_rate=txn_sell,
-            source_rate_text=_rate_text(row.get("transactionBuying"), row.get("transactionSelling")),
-            effective_date=effective_date,
-            effective_date_basis=date_basis,
-            source_record_key=str(row_id) if row_id is not None else None,
-            raw_excerpt={
-                "id": row_id,
-                "currency": currency,
-                "transactionBuying": row.get("transactionBuying"),
-                "transactionSelling": row.get("transactionSelling"),
-                "updatedAt": row.get("updatedAt"),
-            },
-            mapping_notes=["plain_buying_selling_skipped:category_unconfirmed",
-                           "updatedAt_as_source_inferred:ADR-013"],
-        ))
-
-    # ── weighted_average ──────────────────────────────────────────────────────
-    w_buy = _safe_rate(row.get("weightedBuying"))
-    w_sell = _safe_rate(row.get("weightedSelling"))
-    if w_buy is not None or w_sell is not None:
-        records.append(AdapterRecord(
-            source_currency_code=currency,
-            category="weighted_average",
-            buying_rate=w_buy,
-            selling_rate=w_sell,
-            source_rate_text=_rate_text(row.get("weightedBuying"), row.get("weightedSelling")),
-            effective_date=effective_date,
-            effective_date_basis=date_basis,
-            source_record_key=str(row_id) if row_id is not None else None,
-            raw_excerpt={
-                "id": row_id,
-                "currency": currency,
-                "weightedBuying": row.get("weightedBuying"),
-                "weightedSelling": row.get("weightedSelling"),
-                "updatedAt": row.get("updatedAt"),
-            },
-            mapping_notes=["plain_buying_selling_skipped:category_unconfirmed",
-                           "updatedAt_as_source_inferred:ADR-013"],
-        ))
-
-    return records
 
 
 def _parse_updated_at(raw: Optional[str]) -> Optional[date]:
