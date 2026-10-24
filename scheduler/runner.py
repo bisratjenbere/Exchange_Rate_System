@@ -41,6 +41,8 @@ from infrastructure.config import Config
 from infrastructure.adapter_registry import AdapterRegistry, default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
 from infrastructure.error_classifier import ErrorClassifier, default_classifier
+from infrastructure.circuit_breaker import CircuitBreaker, get_default_circuit_breaker
+from infrastructure.timeout_config import get_timeout_config
 from http_clients.http_client import HttpClient, RequestsHttpClient
 
 # Module-level constants (not in Config yet)
@@ -68,7 +70,9 @@ class Scheduler:
         config: Config = None,
         http_client: HttpClient = None,
         adapter_registry: AdapterRegistry = None,
-        error_classifier: ErrorClassifier = None
+        error_classifier: ErrorClassifier = None,
+        circuit_breaker: CircuitBreaker = None,
+        dry_run: bool = False
     ):
         """
         Initialize Scheduler with dependency injection.
@@ -78,6 +82,8 @@ class Scheduler:
             http_client: HTTP client implementation (defaults to RequestsHttpClient)
             adapter_registry: Adapter registry (defaults to default_registry)
             error_classifier: Error classifier (defaults to default_classifier)
+            circuit_breaker: Circuit breaker (defaults to shared instance)
+            dry_run: If True, run without committing to database (for testing)
         """
         self.config = config or Config()
         self.http_client = http_client or RequestsHttpClient(
@@ -88,6 +94,8 @@ class Scheduler:
         )
         self.adapter_registry = adapter_registry or default_registry
         self.error_classifier = error_classifier or default_classifier
+        self.circuit_breaker = circuit_breaker or get_default_circuit_breaker()
+        self.dry_run = dry_run
     
     def run_source(self, conn, source_id: int) -> dict:
         """
@@ -102,6 +110,15 @@ class Scheduler:
         adapter_key = source["adapter_key"]
         source_url = source["source_url"]
         ssl_verify = source["ssl_verify"]
+
+        # Check circuit breaker before attempting
+        if not self.circuit_breaker.should_attempt(adapter_key):
+            return {
+                "source_id": source_id,
+                "status": "skipped",
+                "detail": "circuit breaker open",
+                "adapter_key": adapter_key
+            }
 
         # 1. Recover any stuck run first
         recover_stuck_run(conn, source_id)
@@ -119,9 +136,13 @@ class Scheduler:
         http_status: Optional[int] = None
 
         try:
-            # 3. Fetch
+            # 3. Fetch with adaptive timeout
             adapter = self.adapter_registry.get(adapter_key)
             fetch_method = getattr(adapter, "FETCH_METHOD", None)
+            
+            # Get bank-specific timeout configuration
+            timeout_config = get_timeout_config(adapter_key)
+            
             if fetch_method == "browser":
                 raw_content, http_status = _fetch_browser(adapter, source_url, ssl_verify, self.config.USER_AGENT)
             elif hasattr(adapter, "fetch_raw"):
@@ -129,9 +150,17 @@ class Scheduler:
                     source_url, self.config.USER_AGENT, ssl_verify
                 )
             else:
+                # Create HTTP client with adaptive timeouts
+                http_client = RequestsHttpClient(
+                    connect_timeout=timeout_config["connect_timeout"],
+                    read_timeout=timeout_config["read_timeout"],
+                    max_retries=timeout_config["max_retries"],
+                    user_agent=self.config.USER_AGENT
+                )
+                
                 post_data = getattr(adapter, "FETCH_POST_DATA", None)
                 extra_headers = getattr(adapter, "FETCH_HEADERS", None)
-                response = self.http_client.fetch(
+                response = http_client.fetch(
                     _build_url(source_url, source["adapter_key"]),
                     ssl_verify=ssl_verify,
                     post_data=post_data,
@@ -168,6 +197,22 @@ class Scheduler:
             # 9. Finish run
             duration_ms = int((time.monotonic() - t0) * 1000)
             run_status = _run_status(result)
+            
+            # Dry run mode - don't commit
+            if self.dry_run:
+                conn.rollback()
+                return {
+                    "source_id": source_id,
+                    "status": "dry_run",
+                    "records_found": len(records),
+                    "would_accept": result.accepted,
+                    "would_reject": result.rejected,
+                    "would_flag": result.flagged,
+                    "would_duplicate": result.duplicates,
+                    "schema_changed": schema_changed,
+                    "duration_ms": duration_ms
+                }
+            
             finish_run(
                 conn, run_id, run_status,
                 http_status=http_status,
@@ -181,6 +226,8 @@ class Scheduler:
             if run_status in ("success", "partial_success"):
                 repo.update_last_success(source_id)
                 _reset_failure_counter(conn, source_id)
+                # Circuit breaker: record success
+                self.circuit_breaker.record_success(adapter_key)
                 # Expire stale fallback-date current records (no date on page —
                 # if a currency vanishes for >2 days its old record stays current
                 # forever without this TTL)
@@ -201,6 +248,9 @@ class Scheduler:
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             error_code, error_summary = self.error_classifier.classify(exc)
+
+            # Circuit breaker: record failure
+            self.circuit_breaker.record_failure(adapter_key)
 
             if raw_content and error_code in ("parse_failure", "schema_change"):
                 try:
@@ -435,11 +485,14 @@ def _load_adapter(adapter_key: str):
       dashen_html   → adapters.dashen_html, adapters.dashen
       global_html   → adapters.global_html, adapters.global_, adapters.global
       goh_betoch_html → adapters.goh_betoch_html, adapters.goh_betoch
-    AF-primary keys (addis_bank_af, hijra_af, nbe_af) return an
+    AF-primary keys (addis_bank_af, hijra_af, nbe_af, anbesa_af, oromia_af) return an
     AddisFortuneAdapter instance directly.
     """
     from adapters.addis_fortune.adapter import get_adapter_for_key, AF_SLUG_MAP
-    if adapter_key in AF_SLUG_MAP:
+    # ONLY use AF adapter for keys that are ONLY in AF (no dedicated adapter)
+    # These are: addis_bank_af, hijra_af, nbe_af, anbesa_af, oromia_af
+    af_only_keys = {"addis_bank_af", "hijra_af", "nbe_af", "anbesa_af", "oromia_af"}
+    if adapter_key in af_only_keys:
         af = get_adapter_for_key(adapter_key)
         if af is not None:
             return af
@@ -701,27 +754,6 @@ def _build_url(base_url: str, adapter_key: str) -> str:
         sep = "&" if "?" in base_url else "?"
         return f"{base_url}{sep}Date={today}"
     return base_url
-
-
-def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, repo: RateSourceRepository) -> bool:
-    """
-    Compare current schema fingerprint against stored one.
-    Returns True if schema changed (so caller can auto-accept after successful parse).
-    No longer raises on change — captures raw and lets parse proceed.
-    Only stores fingerprint on first run.
-    """
-    if not hasattr(adapter, "schema_fingerprint"):
-        return False
-    current_fp = adapter.schema_fingerprint(raw_content)
-    stored_fp = source.get("schema_fingerprint")
-    if not stored_fp:
-        repo.update_schema_fingerprint(source["id"], current_fp)
-        return False
-    if current_fp != stored_fp:
-        # Capture raw for inspection but do NOT raise — let parse proceed
-        _store_raw_capture(conn, run_id, "schema_change", raw_content)
-        return True  # caller will auto-accept fingerprint if parse succeeds
-    return False
 
 
 def _store_raw_capture(conn, run_id: int, reason: str, raw_content: str):

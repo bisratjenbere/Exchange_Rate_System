@@ -20,6 +20,8 @@ from pathlib import Path
 import psycopg2
 
 from scheduler.runner import run_all
+from scheduler.health import quick_health_check
+from scheduler.control import CollectionControl
 
 # ── logging ───────────────────────────────────────────────────────────────────
 
@@ -51,6 +53,22 @@ def main():
         sys.exit(1)
 
     try:
+        # Check if collection is paused
+        control = CollectionControl(conn)
+        if control.is_paused():
+            pause_info = control.get_pause_info()
+            log.warning("collection paused by=%s reason=%s", 
+                       pause_info.get('paused_by'), 
+                       pause_info.get('reason'))
+            return
+        
+        # Run health check
+        if not quick_health_check(conn):
+            log.error("health check failed - aborting collection")
+            sys.exit(1)
+        
+        log.info("health check passed - starting collection")
+        
         results = run_all(conn)
     finally:
         conn.close()
