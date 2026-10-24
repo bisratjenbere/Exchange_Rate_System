@@ -12,6 +12,8 @@ Parse rules:
 - weighted_average_buying/selling emitted as weighted_average if non-null and not "NO TRADE"
 - updated_at date part → source_inferred effective_date
 - Partial failure: returns (records, errors). Never raises.
+
+MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
 """
 import hashlib
 import json
@@ -24,6 +26,8 @@ from bs4 import BeautifulSoup
 
 from adapters.base import BankAdapter, ParseResult
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "tsedey_html"
 SOURCE_URL = "https://www.tsedeybank.com.et/"
@@ -35,8 +39,14 @@ _RECORD_RE = re.compile(r'\{"id":\d+,"name":"[^"]+","code":"[A-Z]{3}"[^}]+\}')
 # ADAPTER CLASS
 # ============================================================================
 
-class TsedeyAdapter(BankAdapter):
-    """Tsedey Bank adapter - JSON records embedded in HTML."""
+class TsedeyAdapter(FieldStructureMixin, BankAdapter):
+    """
+    Tsedey Bank adapter - JSON records embedded in HTML.
+    
+    Uses field detection for automatic category discovery from JSON fields.
+    """
+    
+    FIELD_CONFIG = {}
     
     def get_source_url(self) -> str:
         return SOURCE_URL
@@ -57,8 +67,8 @@ class TsedeyAdapter(BankAdapter):
                 row = json.loads(m.group())
                 code = str(row.get("code", "")).strip()
                 category_raw = str(row.get("category", "")).lower()
-                category = "transactional" if category_raw == "non-cash" else "cash" if category_raw == "cash" else None
-                if not code or not category:
+                category = normalize_category(category_raw)
+                if not code or category == "UNKNOWN":
                     continue
                 
                 dedup_key = f"{code}:{category}"
@@ -66,30 +76,69 @@ class TsedeyAdapter(BankAdapter):
                     continue
                 seen.add(dedup_key)
                 
-                effective_date = self._parse_iso_date(row.get("updated_at", ""))
+                # Parse ISO 8601 timestamp (extract date part only)
+                updated_at_str = row.get("updated_at", "")
+                effective_date = None
+                if updated_at_str:
+                    try:
+                        # Extract YYYY-MM-DD from "2026-10-22T05:28:32.000000Z"
+                        effective_date = self._parse_iso_date(updated_at_str.split("T")[0])
+                    except (AttributeError, IndexError):
+                        pass
                 date_basis = "source_inferred" if effective_date else "collection_date_fallback"
                 
-                buying = self._safe_rate(row.get("buying_rate"))
-                selling = self._safe_rate(row.get("selling_rate"))
-                if buying is not None or selling is not None:
-                    result.records.append(_make_record(
-                        code, category, buying, selling,
-                        row.get("buying_rate"), row.get("selling_rate"),
-                        effective_date, date_basis, row
-                    ))
+                # Create dict with generic field names for main rates
+                row_dict = {
+                    "buying_rate": row.get("buying_rate"),
+                    "selling_rate": row.get("selling_rate"),
+                }
+                
+                # Use field detection
+                detected_records = self.detect_and_emit(
+                    data=row_dict,
+                    currency=code,
+                    effective_date=effective_date,
+                    effective_date_basis=date_basis,
+                    source_record_id=str(row.get("id")) if row.get("id") else None
+                )
+                
+                # Context-based category override: JSON explicitly provides category
+                for rec in detected_records:
+                    if rec.category == 'UNKNOWN':
+                        rec.category = normalize_category(category_raw)
+                    rec.raw_excerpt = {"currency": code, "buying": row.get("buying_rate"), 
+                                       "selling": row.get("selling_rate"), "category": row.get("category"), 
+                                       "updated_at": row.get("updated_at")}
+                
+                result.records.extend(detected_records)
                 
                 # weighted average
-                w_buy = self._safe_rate(row.get("weighted_average_buying"))
-                w_sell = self._safe_rate(row.get("weighted_average_selling"))
+                w_buy_text = row.get("weighted_average_buying")
+                w_sell_text = row.get("weighted_average_selling")
                 w_key = f"{code}:weighted_average"
-                if (w_buy is not None or w_sell is not None) and w_key not in seen:
+                if (w_buy_text and w_sell_text) and w_key not in seen:
                     seen.add(w_key)
-                    result.records.append(_make_record(
-                        code, "weighted_average", w_buy, w_sell,
-                        row.get("weighted_average_buying"),
-                        row.get("weighted_average_selling"),
-                        effective_date, date_basis, row
-                    ))
+                    
+                    row_dict_weighted = {
+                        "weighted_average_buying": w_buy_text,
+                        "weighted_average_selling": w_sell_text,
+                    }
+                    
+                    detected_weighted = self.detect_and_emit(
+                        data=row_dict_weighted,
+                        currency=code,
+                        effective_date=effective_date,
+                        effective_date_basis=date_basis,
+                        source_record_id=str(row.get("id")) if row.get("id") else None
+                    )
+                    
+                    # Override to weighted_average category
+                    for rec in detected_weighted:
+                        rec.category = "weighted_average"
+                        rec.raw_excerpt = {"currency": code, "buying": w_buy_text, 
+                                           "selling": w_sell_text, "category": "weighted_average"}
+                    
+                    result.records.extend(detected_weighted)
             except Exception as exc:
                 result.add_error(f"record:{m.group()[:40]}:{exc}")
         
