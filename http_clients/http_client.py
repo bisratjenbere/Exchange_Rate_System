@@ -78,13 +78,19 @@ class RequestsHttpClient(HttpClient):
     Production HTTP client using requests library.
     
     Features:
-    - Configurable timeout, retries, and retry delay
+    - Configurable connect and read timeouts (separate)
+    - Configurable retries and retry delay
     - Exponential backoff on retry
     - Automatic User-Agent header
     - Never raises exceptions - returns error in HttpResponse
+    - Smart retry logic (different handling for connect vs read timeouts)
     
     Example:
-        client = RequestsHttpClient(timeout=15, max_retries=2)
+        client = RequestsHttpClient(
+            connect_timeout=5.0,
+            read_timeout=15.0, 
+            max_retries=2
+        )
         response = client.fetch("https://example.com/rates")
         if response.is_success():
             data = response.content
@@ -92,7 +98,8 @@ class RequestsHttpClient(HttpClient):
     
     def __init__(
         self,
-        timeout: float = 15.0,
+        connect_timeout: float = 5.0,   # Connection establishment timeout
+        read_timeout: float = 15.0,      # Response reading timeout
         max_retries: int = 2,
         retry_delay: float = 2.0,
         user_agent: str = "EthiopianBankRateCollector/1.0"
@@ -101,12 +108,15 @@ class RequestsHttpClient(HttpClient):
         Initialize RequestsHttpClient.
         
         Args:
-            timeout: Request timeout in seconds (default: 15.0)
+            connect_timeout: Connection timeout in seconds (default: 5.0)
+            read_timeout: Read timeout in seconds (default: 15.0)
             max_retries: Maximum number of retry attempts (default: 2)
             retry_delay: Base delay between retries in seconds (default: 2.0)
             user_agent: User-Agent header value
         """
-        self.timeout = timeout
+        self.connect_timeout = connect_timeout
+        self.read_timeout = read_timeout
+        self.timeout = (connect_timeout, read_timeout)  # requests format: (connect, read)
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.user_agent = user_agent
@@ -119,9 +129,10 @@ class RequestsHttpClient(HttpClient):
         headers: Optional[dict] = None
     ) -> HttpResponse:
         """
-        Fetch content from URL with retry logic.
+        Fetch content from URL with smart retry logic.
         
         Retries on timeout and connection errors with exponential backoff.
+        Different handling for connect timeout vs read timeout.
         Never raises exceptions - returns error in HttpResponse.
         
         Args:
@@ -147,14 +158,14 @@ class RequestsHttpClient(HttpClient):
                         url,
                         json=post_data,
                         headers=req_headers,
-                        timeout=self.timeout,
+                        timeout=self.timeout,  # (connect_timeout, read_timeout)
                         verify=ssl_verify
                     )
                 else:
                     response = requests.get(
                         url,
                         headers=req_headers,
-                        timeout=self.timeout,
+                        timeout=self.timeout,  # (connect_timeout, read_timeout)
                         verify=ssl_verify
                     )
                 
@@ -166,15 +177,34 @@ class RequestsHttpClient(HttpClient):
                     error=None if response.ok else f"HTTP {response.status_code}"
                 )
             
-            except requests.Timeout as exc:
-                last_error = f"Timeout after {self.timeout}s: {exc}"
+            except requests.ConnectTimeout as exc:
+                # Connection timeout - likely network issue
+                # Retry quickly with exponential backoff
+                last_error = f"Connect timeout after {self.connect_timeout}s: {exc}"
                 if attempt < self.max_retries:
-                    # Exponential backoff: delay * 2^attempt
+                    delay = self.retry_delay * (2 ** attempt)
+                    time.sleep(delay)
+                    continue
+            
+            except requests.ReadTimeout as exc:
+                # Read timeout - server is slow/stuck
+                # Don't retry immediately (give server time to recover)
+                last_error = f"Read timeout after {self.read_timeout}s: {exc}"
+                if attempt < self.max_retries:
+                    delay = self.retry_delay * 3  # Longer delay for read timeouts
+                    time.sleep(delay)
+                    continue
+            
+            except requests.Timeout as exc:
+                # Generic timeout (shouldn't happen with separate timeouts, but just in case)
+                last_error = f"Timeout: {exc}"
+                if attempt < self.max_retries:
                     delay = self.retry_delay * (2 ** attempt)
                     time.sleep(delay)
                     continue
             
             except requests.ConnectionError as exc:
+                # Network/DNS issue - retry with exponential backoff
                 last_error = f"Connection error: {exc}"
                 if attempt < self.max_retries:
                     delay = self.retry_delay * (2 ** attempt)

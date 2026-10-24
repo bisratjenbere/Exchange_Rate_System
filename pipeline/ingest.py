@@ -83,8 +83,9 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
     # 2. Resolve category_id (NULL for UNKNOWN — excluded from trusted view)
     category_id = category_map.get(record.category)  # None if UNKNOWN
 
-    # 3. Fingerprint
-    fingerprint = compute_fingerprint(record, source_id)
+    # 3. Fingerprint (includes collection_date for daily snapshot uniqueness)
+    collection_date = fetched_at.date()
+    fingerprint = compute_fingerprint(record, source_id, collection_date)
 
     # 4. Identity
     logical_key, identity_status = build_identity(record, source_id,

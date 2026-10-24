@@ -15,5 +15,11 @@ requests==2.31.0
 # Browser Automation (for JS-rendered sources)
 playwright==1.44.0
 
+# Metrics & Monitoring
+prometheus-client==0.19.0
+
+# CLI
+click==8.1.7
+
 # Testing (optional but recommended)
 pytest==7.4.3
