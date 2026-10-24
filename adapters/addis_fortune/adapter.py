@@ -26,6 +26,8 @@ from bs4 import BeautifulSoup
 
 from adapters.base import BankAdapter, ParseResult
 from domain.records import AdapterRecord
+from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 from pipeline.normalize import normalize_rate
 
 ADAPTER_KEY = "addis_fortune"
@@ -95,7 +97,7 @@ def _safe_rate(val) -> Optional[Decimal]:
         return None
 
 
-class AddisFortuneAdapter(BankAdapter):
+class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
     """
     Addis Fortune adapter for a specific bank slug.
 
@@ -105,7 +107,11 @@ class AddisFortuneAdapter(BankAdapter):
         result = adapter.parse(raw[0])
     """
 
+    # Pattern D: Empty config - field names are self-describing (cashBuying/transBuying)
+    FIELD_CONFIG = {}
+
     def __init__(self, slug: str):
+        super().__init__()
         self._slug = slug
         self._url = BASE_URL.format(slug=slug)
 
@@ -153,51 +159,23 @@ class AddisFortuneAdapter(BankAdapter):
                 result.add_warning(f"{currency}: stale date {row.get('applicable_date')}, skipped")
                 continue
 
-            cash_buy = _safe_rate(row.get("cashBuying"))
-            cash_sell = _safe_rate(row.get("cashSelling"))
-            trans_buy = _safe_rate(row.get("transBuying"))
-            trans_sell = _safe_rate(row.get("transSelling"))
+            # Use field detection to emit records based on field structure
+            mapping_notes = [
+                f"af_slug={self._slug}",
+                f"applicable_date={row.get('applicable_date')}"
+            ]
 
-            base_excerpt = {
-                "currency": currency,
-                "applicable_date": row.get("applicable_date"),
-                "fallback_source": "addis_fortune",
-                "af_slug": self._slug,
-            }
+            detected_records = self.detect_and_emit(
+                data=row,
+                currency=currency,
+                source_record_id=currency,
+                effective_date=applicable_date,
+                effective_date_basis="source_published",  # AF publishes dates
+                currency_name=row.get("currency_name"),
+                mapping_notes=mapping_notes
+            )
 
-            # Cash record — skip if both rates are zero (bank doesn't publish cash)
-            if not (not cash_buy and not cash_sell):
-                result.records.append(AdapterRecord(
-                    source_currency_code=currency,
-                    currency_name=row.get("currency_name"),
-                    category="cash",
-                    buying_rate=cash_buy,
-                    selling_rate=cash_sell,
-                    source_rate_text=f"{row.get('cashBuying')}/{row.get('cashSelling')}",
-                    effective_date=applicable_date,
-                    effective_date_basis="source_published",
-                    source_record_key=f"{currency}:cash",
-                    unit_multiplier=1,
-                    raw_excerpt={**base_excerpt, "type": "cash"},
-                    mapping_notes=[],
-                ))
-
-            # Transactional record
-            if trans_buy is not None or trans_sell is not None:
-                result.records.append(AdapterRecord(
-                    source_currency_code=currency,
-                    currency_name=row.get("currency_name"),
-                    category="transactional",
-                    buying_rate=trans_buy,
-                    selling_rate=trans_sell,
-                    source_rate_text=f"{row.get('transBuying')}/{row.get('transSelling')}",
-                    effective_date=applicable_date,
-                    effective_date_basis="source_published",
-                    source_record_key=f"{currency}:transactional",
-                    unit_multiplier=1,
-                    raw_excerpt={**base_excerpt, "type": "transactional"},
-                    mapping_notes=[],
-                ))
+            result.records.extend(detected_records)
 
         return result
 
