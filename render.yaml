@@ -3,7 +3,7 @@ services:
     name: exchange-rates-api
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt && playwright install chromium --with-deps
+    buildCommand: pip install -r requirements.txt
     startCommand: gunicorn -c gunicorn.conf.py api.app:app
     envVars:
       - key: DATABASE_URL
