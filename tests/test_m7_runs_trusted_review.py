@@ -1,8 +1,3 @@
-"""
-M7 tests — collection run lifecycle, trusted view, review workflow.
-Acceptance tests 9, 10, 11, 19, 20, 21, 22.
-Gap-review tests C, G, K, L.
-"""
 import hashlib
 import pytest
 from decimal import Decimal
@@ -23,9 +18,6 @@ from pipeline.runs import (
 from trusted_view.query import get_trusted_rates, get_observation_with_warnings
 from review.workflow import decide_candidate
 
-
-# ── fixtures ─────────────────────────────────────────────────────────────────
-
 @pytest.fixture(scope="module")
 def db():
     conn = get_conn()
@@ -34,15 +26,12 @@ def db():
     yield conn
     conn.close()
 
-
 @pytest.fixture(autouse=True)
 def rollback(db):
     yield
     db.rollback()
 
-
 NOW = datetime(2026, 10, 10, 8, 0, 0, tzinfo=timezone.utc)
-
 
 def _seed_bank(cur, code):
     cur.execute(
@@ -51,17 +40,15 @@ def _seed_bank(cur, code):
     )
     return cur.fetchone()[0]
 
-
-def _seed_source(cur, bank_id, key, verified=False):
+def _seed_source(cur, bank_id, key, verified=False, is_enabled=True):
     vstatus = "provisional" if verified else "unverified"
     cur.execute(
         """INSERT INTO rate_source
-               (bank_id, source_url, collection_method, adapter_key, verification_status)
-           VALUES (%s,'https://x.com','api',%s,%s) RETURNING id""",
-        (bank_id, key, vstatus),
+               (bank_id, source_url, collection_method, adapter_key, verification_status, is_enabled)
+           VALUES (%s,'https://x.com','api',%s,%s,%s) RETURNING id""",
+        (bank_id, key, vstatus, is_enabled),
     )
     return cur.fetchone()[0]
-
 
 def _seed_category(cur, code="cash"):
     cur.execute(
@@ -71,7 +58,6 @@ def _seed_category(cur, code="cash"):
         (code, code),
     )
     return cur.fetchone()[0]
-
 
 def _record(currency="USD", category="cash",
             buying=Decimal("161.00"), selling=Decimal("164.00"),
@@ -84,7 +70,6 @@ def _record(currency="USD", category="cash",
         source_record_key=src_key,
         source_rate_text=f"{buying}/{selling}",
     )
-
 
 def _persist(db, record, source_id, run_id, category_id,
              version=1, is_current=True, lkey=None, istatus=None):
@@ -101,9 +86,6 @@ def _persist(db, record, source_id, run_id, category_id,
         fetched_at=NOW, version_number=version, is_current=is_current,
     )
 
-
-# ── run lifecycle ─────────────────────────────────────────────────────────────
-
 def test_start_run_creates_running_row(db):
     cur = db.cursor()
     bid = _seed_bank(cur, "RL1")
@@ -113,7 +95,6 @@ def test_start_run_creates_running_row(db):
     cur = db.cursor()
     cur.execute("SELECT status FROM collection_run WHERE id=%s", (run_id,))
     assert cur.fetchone()[0] == "running"
-
 
 def test_finish_run_marks_success(db):
     cur = db.cursor()
@@ -128,7 +109,6 @@ def test_finish_run_marks_success(db):
     assert row[0] == "success"
     assert row[1] == 5
 
-
 def test_finish_run_marks_failed(db):
     cur = db.cursor()
     bid = _seed_bank(cur, "RL3")
@@ -142,9 +122,7 @@ def test_finish_run_marks_failed(db):
     assert row[0] == "failed"
     assert row[1] == "HTTP_403"
 
-
 def test_gap_K_one_running_run_per_source(db):
-    """Gap review K: overlapping runs for same source prevented."""
     cur = db.cursor()
     bid = _seed_bank(cur, "RL4")
     sid = _seed_source(cur, bid, "rl4")
@@ -152,7 +130,6 @@ def test_gap_K_one_running_run_per_source(db):
     start_run(db, sid)
     with pytest.raises(psycopg2.errors.UniqueViolation):
         start_run(db, sid)
-
 
 def test_gap_K_second_run_allowed_after_first_finishes(db):
     cur = db.cursor()
@@ -164,13 +141,10 @@ def test_gap_K_second_run_allowed_after_first_finishes(db):
     run_id2 = start_run(db, sid)
     assert run_id2 != run_id
 
-
 def test_gap_K_recover_stuck_run(db):
-    """Gap review K: stuck running row recovered by documented rule."""
     cur = db.cursor()
     bid = _seed_bank(cur, "RL6")
     sid = _seed_source(cur, bid, "rl6")
-    # Insert a run that started well beyond the threshold
     old_start = datetime.now(timezone.utc) - timedelta(hours=STUCK_RUN_THRESHOLD_HOURS + 1)
     cur.execute(
         """INSERT INTO collection_run (source_id, started_at, status)
@@ -189,7 +163,6 @@ def test_gap_K_recover_stuck_run(db):
     assert row[0] == "failed"
     assert row[1] == "stuck_run_recovered"
 
-
 def test_raw_capture_inserted(db):
     cur = db.cursor()
     bid = _seed_bank(cur, "RL7")
@@ -202,36 +175,29 @@ def test_raw_capture_inserted(db):
     cur.execute("SELECT capture_reason FROM raw_capture WHERE collection_run_id=%s", (run_id,))
     assert cur.fetchone()[0] == "parse_failure"
 
-
 def test_acceptance_10_failed_run_prior_observations_intact(db):
-    """Acceptance test 10: failed run does not delete or invalidate earlier observations."""
     cur = db.cursor()
     bid = _seed_bank(cur, "AT10")
     sid = _seed_source(cur, bid, "at10")
     cid = _seed_category(cur)
     db.commit()
 
-    # First successful run with an observation
     run1 = start_run(db, sid)
     r = _record(src_key="pub-010")
     lkey, istatus = build_identity(r, sid)
     obs_id = _persist(db, r, sid, run1, cid, lkey=lkey, istatus=istatus)
     finish_run(db, run1, "success", records_found=1, records_accepted=1)
 
-    # Second run fails
     run2 = start_run(db, sid)
     finish_run(db, run2, "failed", error_code="TIMEOUT")
 
-    # Prior observation still present and current
     cur = db.cursor()
     cur.execute("SELECT is_current, validation_status FROM rate_observation WHERE id=%s", (obs_id,))
     row = cur.fetchone()
     assert row[0] is True
     assert row[1] == "validated"
 
-
 def test_acceptance_11_success_with_no_new_rates(db):
-    """Acceptance test 11: successful run with no new rates is still success."""
     cur = db.cursor()
     bid = _seed_bank(cur, "AT11")
     sid = _seed_source(cur, bid, "at11")
@@ -244,11 +210,7 @@ def test_acceptance_11_success_with_no_new_rates(db):
     assert row[0] == "success"
     assert row[1] == 0
 
-
-# ── trusted view ─────────────────────────────────────────────────────────────
-
 def test_acceptance_19_trusted_view_excludes_ambiguous(db):
-    """Acceptance test 19: current selection excludes ambiguous identity."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV1")
     sid = _seed_source(cur, bid, "tv1")
@@ -256,7 +218,6 @@ def test_acceptance_19_trusted_view_excludes_ambiguous(db):
     db.commit()
     run_id = start_run(db, sid)
 
-    # Ambiguous record (no date, no key)
     r_amb = AdapterRecord(
         source_currency_code="USD", category="cash",
         buying_rate=Decimal("161.00"), selling_rate=Decimal("164.00"),
@@ -274,9 +235,7 @@ def test_acceptance_19_trusted_view_excludes_ambiguous(db):
     rates = get_trusted_rates(db, source_id=sid)
     assert all(r["identity_status"] != "ambiguous" for r in rates)
 
-
 def test_acceptance_19_trusted_view_excludes_rejected(db):
-    """Acceptance test 19: rejected observations excluded from trusted view."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV2")
     sid = _seed_source(cur, bid, "tv2")
@@ -298,9 +257,7 @@ def test_acceptance_19_trusted_view_excludes_rejected(db):
     rates = get_trusted_rates(db, source_id=sid)
     assert all(r["validation_status"] != "rejected" for r in rates)
 
-
 def test_acceptance_19_trusted_view_excludes_unknown_category(db):
-    """Gap review E / acceptance test 19: unknown category (NULL category_id) excluded."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV3")
     sid = _seed_source(cur, bid, "tv3")
@@ -321,12 +278,10 @@ def test_acceptance_19_trusted_view_excludes_unknown_category(db):
     rates = get_trusted_rates(db, source_id=sid)
     assert len(rates) == 0
 
-
 def test_gap_L_provisional_source_labeled(db):
-    """Gap review L: data from provisional sources is visibly labeled."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV4")
-    sid = _seed_source(cur, bid, "tv4", verified=False)  # unverified
+    sid = _seed_source(cur, bid, "tv4", verified=False)
     cid = _seed_category(cur)
     db.commit()
     run_id = start_run(db, sid)
@@ -340,9 +295,7 @@ def test_gap_L_provisional_source_labeled(db):
     assert len(rates) == 1
     assert rates[0]["is_provisional"] is True
 
-
 def test_gap_C_pending_review_shows_uncertainty_warning(db):
-    """Gap review C: pending review on a logical observation shows uncertainty warning."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV5")
     sid = _seed_source(cur, bid, "tv5")
@@ -370,9 +323,7 @@ def test_gap_C_pending_review_shows_uncertainty_warning(db):
     assert result is not None
     assert result["has_pending_review"] is True
 
-
 def test_acceptance_21_stale_rate_shows_staleness_warning(db):
-    """Acceptance test 21: stale rates show effective_date and staleness warning."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV6")
     sid = _seed_source(cur, bid, "tv6")
@@ -380,7 +331,6 @@ def test_acceptance_21_stale_rate_shows_staleness_warning(db):
     db.commit()
     run_id = start_run(db, sid)
 
-    # Effective date 10 days before fetch
     stale_date = date(2026, 9, 30)
     r = _record(src_key="pub-tv6", eff_date=stale_date)
     lkey, istatus = build_identity(r, sid)
@@ -398,9 +348,7 @@ def test_acceptance_21_stale_rate_shows_staleness_warning(db):
     assert result["effective_date"] == stale_date
     assert result["staleness_warning"] is True
 
-
 def test_acceptance_22_no_silent_substitution(db):
-    """Acceptance test 22: if no current observation exists, trusted view returns nothing — no silent fallback."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV7")
     sid = _seed_source(cur, bid, "tv7")
@@ -408,49 +356,38 @@ def test_acceptance_22_no_silent_substitution(db):
     db.commit()
     run_id = start_run(db, sid)
 
-    # Insert a non-current (superseded) observation
     r = _record(src_key="pub-tv7")
     lkey, istatus = build_identity(r, sid)
     _persist(db, r, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1, is_current=False)
     finish_run(db, run_id, "success")
 
     rates = get_trusted_rates(db, source_id=sid)
-    # No current observation → nothing returned
     assert len(rates) == 0
 
     result = get_observation_with_warnings(db, lkey)
     assert result is None
 
-
 def test_gap_G_disappearing_data_no_current(db):
-    """Gap review G: previously populated source returning empty → no current rates shown."""
     cur = db.cursor()
     bid = _seed_bank(cur, "TV8")
     sid = _seed_source(cur, bid, "tv8")
     cid = _seed_category(cur)
     db.commit()
 
-    # First run: observation stored and current
     run1 = start_run(db, sid)
     r = _record(src_key="pub-tv8")
     lkey, istatus = build_identity(r, sid)
     _persist(db, r, sid, run1, cid, lkey=lkey, istatus=istatus, version=1, is_current=True)
     finish_run(db, run1, "success", records_found=1, records_accepted=1)
 
-    # Second run: empty response — no new observations, prior remains current
     run2 = start_run(db, sid)
     finish_run(db, run2, "success", records_found=0, records_accepted=0)
 
-    # Prior observation still current (not deleted by empty run)
     rates = get_trusted_rates(db, source_id=sid)
     assert len(rates) == 1
     assert rates[0]["identity_status"] == "confirmed"
 
-
-# ── review workflow ───────────────────────────────────────────────────────────
-
 def test_review_dismissed_candidate(db):
-    """Dismissed candidate: audit record kept, change_review_status updated."""
     cur = db.cursor()
     bid = _seed_bank(cur, "RV1")
     sid = _seed_source(cur, bid, "rv1")
@@ -487,13 +424,10 @@ def test_review_dismissed_candidate(db):
     assert row[0] == "dismissed"
     assert row[1] == "reviewer@example.com"
 
-    # Prior version still current
     cur.execute("SELECT is_current FROM rate_observation WHERE id=%s", (prior_id,))
     assert cur.fetchone()[0] is True
 
-
 def test_review_confirmed_correction_via_workflow(db):
-    """Confirmed correction via review workflow creates new version, prior non-current."""
     cur = db.cursor()
     bid = _seed_bank(cur, "RV2")
     sid = _seed_source(cur, bid, "rv2")

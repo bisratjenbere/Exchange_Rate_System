@@ -1,16 +1,8 @@
-"""
-tests/test_m9_api_alerts.py — Phase 7: read API and alert checks.
-
-API tests use Flask test client with a mock for get_trusted_rates.
-Alert tests run against a real database (same pattern as test_m7).
-"""
 import json
 import pytest
 from decimal import Decimal
 from datetime import datetime, date, timezone, timedelta
 from unittest.mock import patch
-
-# ── API tests (no DB needed) ──────────────────────────────────────────────────
 
 SAMPLE_ROW = {
     "id": 1,
@@ -34,7 +26,6 @@ SAMPLE_ROW = {
     "is_provisional": True,
 }
 
-
 @pytest.fixture
 def client():
     import sys, os
@@ -44,21 +35,16 @@ def client():
     with app.test_client() as c:
         yield c
 
-
 def _mock_rates(rows):
     return patch("api.app.get_trusted_rates", return_value=rows)
-
 
 def _mock_conn():
     return patch("api.app._conn")
 
-
 from contextlib import contextmanager
-
 
 @contextmanager
 def _mock_ui_deps(rows=None, currencies=None, banks=None, matrix=None):
-    """Patch all query functions used by the / route."""
     from decimal import Decimal
     _rows = rows if rows is not None else [SAMPLE_ROW]
     _currencies = currencies or ["USD"]
@@ -89,7 +75,6 @@ def _mock_ui_deps(rows=None, currencies=None, banks=None, matrix=None):
          _mock_conn():
         yield
 
-
 def test_health_ok(client):
     with _mock_conn():
         with patch("api.app.psycopg2.connect") as mock_connect:
@@ -98,12 +83,10 @@ def test_health_ok(client):
             mock_connect.return_value.cursor.return_value.__enter__ = lambda s: s
             mock_connect.return_value.cursor.return_value.__exit__ = lambda *a: None
             mock_connect.return_value.cursor.return_value.execute = lambda q: None
-    # health endpoint just needs DB reachable; test the route exists and returns JSON
     resp = client.get("/health")
     assert resp.status_code in (200, 503)
     data = json.loads(resp.data)
     assert "status" in data
-
 
 def test_rates_returns_json(client):
     with _mock_rates([SAMPLE_ROW]):
@@ -114,7 +97,6 @@ def test_rates_returns_json(client):
     assert isinstance(rows, list)
     assert rows[0]["currency_code"] == "USD"
 
-
 def test_rates_source_id_filter(client):
     with _mock_rates([SAMPLE_ROW]):
         with _mock_conn():
@@ -123,20 +105,17 @@ def test_rates_source_id_filter(client):
     rows = json.loads(resp.data)
     assert len(rows) == 1
 
-
 def test_rates_path_form(client):
     with _mock_rates([SAMPLE_ROW]):
         with _mock_conn():
             resp = client.get("/rates/1")
     assert resp.status_code == 200
 
-
 def test_rates_path_form_404(client):
     with _mock_rates([]):
         with _mock_conn():
             resp = client.get("/rates/999")
     assert resp.status_code == 404
-
 
 def test_ui_renders(client):
     with _mock_ui_deps():
@@ -145,12 +124,10 @@ def test_ui_renders(client):
     assert b"Test Bank" in resp.data
     assert b"PROVISIONAL" in resp.data
 
-
 def test_ui_shows_bank_name(client):
     with _mock_ui_deps():
         resp = client.get("/?view=compare&currency=USD")
     assert b"Test Bank" in resp.data
-
 
 def test_ui_compare_view(client):
     with _mock_ui_deps():
@@ -159,13 +136,11 @@ def test_ui_compare_view(client):
     assert b"Test Bank" in resp.data
     assert b"USD" in resp.data
 
-
 def test_ui_bank_view(client):
     with _mock_ui_deps():
         resp = client.get("/?view=bank&source_id=1")
     assert resp.status_code == 200
     assert b"Test Bank" in resp.data
-
 
 def test_ui_all_view(client):
     with _mock_ui_deps():
@@ -173,14 +148,11 @@ def test_ui_all_view(client):
     assert resp.status_code == 200
     assert b"USD" in resp.data
 
-
 def test_ui_shows_pending_review(client):
-    # pending review badge appears in compare view under bank name
     row = {**SAMPLE_ROW, "has_pending_review": True, "is_provisional": False, "staleness_warning": False}
     with _mock_ui_deps(rows=[row]):
         resp = client.get("/?view=compare&currency=USD")
     assert resp.status_code == 200
-
 
 def test_ui_shows_stale(client):
     row = {**SAMPLE_ROW, "staleness_warning": True, "is_provisional": False}
@@ -188,13 +160,11 @@ def test_ui_shows_stale(client):
         resp = client.get("/?view=compare&currency=USD")
     assert b"STALE" in resp.data
 
-
 def test_ui_no_rows(client):
     empty_matrix = {"currencies": [], "banks": [], "matrix": {}, "best_buying": {}}
     with _mock_ui_deps(rows=[], matrix=empty_matrix):
         resp = client.get("/?view=all&filter=all")
     assert b"No trusted rates" in resp.data
-
 
 def test_banks_endpoint(client):
     with patch("api.app.get_available_banks", return_value=[{"id": 1, "name": "Test Bank"}]):
@@ -204,7 +174,6 @@ def test_banks_endpoint(client):
     data = json.loads(resp.data)
     assert data[0]["name"] == "Test Bank"
 
-
 def test_rates_by_currency_endpoint(client):
     with patch("api.app.get_trusted_rates_by_currency", return_value=[SAMPLE_ROW]):
         with _mock_conn():
@@ -213,15 +182,11 @@ def test_rates_by_currency_endpoint(client):
     rows = json.loads(resp.data)
     assert rows[0]["source_currency_code"] == "USD"
 
-
 def test_rates_by_currency_404(client):
     with patch("api.app.get_trusted_rates_by_currency", return_value=[]):
         with _mock_conn():
             resp = client.get("/rates/by-currency/XYZ")
     assert resp.status_code == 404
-
-
-# ── Alert tests (real DB) ─────────────────────────────────────────────────────
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -234,7 +199,6 @@ from alerts.checker import (
     run_all_checks,
 )
 
-
 @pytest.fixture(scope="module")
 def db():
     conn = get_conn()
@@ -243,7 +207,6 @@ def db():
     yield conn
     conn.close()
 
-
 def _insert_bank(conn, code="TST"):
     with conn.cursor() as cur:
         cur.execute(
@@ -251,7 +214,6 @@ def _insert_bank(conn, code="TST"):
             (code, f"Test Bank {code}"),
         )
         return cur.fetchone()[0]
-
 
 def _insert_source(conn, bank_id, adapter_key="tst", is_enabled=True,
                    last_success_at=None):
@@ -265,7 +227,6 @@ def _insert_source(conn, bank_id, adapter_key="tst", is_enabled=True,
             (bank_id, adapter_key, is_enabled, last_success_at),
         )
         return cur.fetchone()[0]
-
 
 def _insert_run(conn, source_id, status, finished_at=None,
                 records_found=1, error_code=None, error_summary=None):
@@ -282,7 +243,6 @@ def _insert_run(conn, source_id, status, finished_at=None,
         )
         return cur.fetchone()[0]
 
-
 def _insert_raw_capture(conn, run_id, reason, captured_at=None):
     ts = captured_at or datetime.now(timezone.utc)
     with conn.cursor() as cur:
@@ -294,9 +254,6 @@ def _insert_raw_capture(conn, run_id, reason, captured_at=None):
             (run_id, ts, reason, "a" * 64),
         )
 
-
-# ── check_failed_runs ─────────────────────────────────────────────────────────
-
 def test_failed_run_detected(db):
     bank_id = _insert_bank(db, "FR1")
     src_id = _insert_source(db, bank_id, "fr1")
@@ -307,7 +264,6 @@ def test_failed_run_detected(db):
     assert any(a["source_id"] == src_id for a in alerts)
     assert all(a["type"] == "failed_run" for a in alerts)
 
-
 def test_failed_run_outside_window_ignored(db):
     bank_id = _insert_bank(db, "FR2")
     src_id = _insert_source(db, bank_id, "fr2")
@@ -317,7 +273,6 @@ def test_failed_run_outside_window_ignored(db):
     alerts = check_failed_runs(db, since_hours=1)
     assert not any(a["source_id"] == src_id for a in alerts)
 
-
 def test_successful_run_not_alerted(db):
     bank_id = _insert_bank(db, "FR3")
     src_id = _insert_source(db, bank_id, "fr3")
@@ -325,9 +280,6 @@ def test_successful_run_not_alerted(db):
     db.commit()
     alerts = check_failed_runs(db, since_hours=1)
     assert not any(a["source_id"] == src_id for a in alerts)
-
-
-# ── check_schema_changes ──────────────────────────────────────────────────────
 
 def test_schema_change_detected(db):
     bank_id = _insert_bank(db, "SC1")
@@ -339,7 +291,6 @@ def test_schema_change_detected(db):
     assert any(a["source_id"] == src_id for a in alerts)
     assert all(a["type"] == "schema_change" for a in alerts)
 
-
 def test_schema_change_outside_window_ignored(db):
     bank_id = _insert_bank(db, "SC2")
     src_id = _insert_source(db, bank_id, "sc2")
@@ -350,7 +301,6 @@ def test_schema_change_outside_window_ignored(db):
     alerts = check_schema_changes(db, since_hours=1)
     assert not any(a["source_id"] == src_id for a in alerts)
 
-
 def test_other_capture_reason_not_schema_alert(db):
     bank_id = _insert_bank(db, "SC3")
     src_id = _insert_source(db, bank_id, "sc3")
@@ -359,9 +309,6 @@ def test_other_capture_reason_not_schema_alert(db):
     db.commit()
     alerts = check_schema_changes(db, since_hours=1)
     assert not any(a["source_id"] == src_id for a in alerts)
-
-
-# ── check_disappearing_data ───────────────────────────────────────────────────
 
 def test_disappearing_data_detected(db):
     bank_id = _insert_bank(db, "DD1")
@@ -372,7 +319,6 @@ def test_disappearing_data_detected(db):
     assert any(a["source_id"] == src_id for a in alerts)
     assert all(a["type"] == "disappearing_data" for a in alerts)
 
-
 def test_disappearing_data_not_triggered_with_records(db):
     bank_id = _insert_bank(db, "DD2")
     src_id = _insert_source(db, bank_id, "dd2", is_enabled=True)
@@ -381,7 +327,6 @@ def test_disappearing_data_not_triggered_with_records(db):
     alerts = check_disappearing_data(db)
     assert not any(a["source_id"] == src_id for a in alerts)
 
-
 def test_disappearing_data_disabled_source_ignored(db):
     bank_id = _insert_bank(db, "DD3")
     src_id = _insert_source(db, bank_id, "dd3", is_enabled=False)
@@ -389,9 +334,6 @@ def test_disappearing_data_disabled_source_ignored(db):
     db.commit()
     alerts = check_disappearing_data(db)
     assert not any(a["source_id"] == src_id for a in alerts)
-
-
-# ── check_stale_rates ─────────────────────────────────────────────────────────
 
 def test_stale_never_succeeded(db):
     bank_id = _insert_bank(db, "SR1")
@@ -402,7 +344,6 @@ def test_stale_never_succeeded(db):
     assert any(a["source_id"] == src_id for a in alerts)
     assert all(a["type"] == "stale_rates" for a in alerts)
 
-
 def test_stale_old_success(db):
     bank_id = _insert_bank(db, "SR2")
     old = datetime.now(timezone.utc) - timedelta(hours=48)
@@ -411,7 +352,6 @@ def test_stale_old_success(db):
     db.commit()
     alerts = check_stale_rates(db, stale_hours=1)
     assert any(a["source_id"] == src_id for a in alerts)
-
 
 def test_stale_recent_success_not_alerted(db):
     bank_id = _insert_bank(db, "SR3")
@@ -422,7 +362,6 @@ def test_stale_recent_success_not_alerted(db):
     alerts = check_stale_rates(db, stale_hours=1)
     assert not any(a["source_id"] == src_id for a in alerts)
 
-
 def test_stale_disabled_source_ignored(db):
     bank_id = _insert_bank(db, "SR4")
     src_id = _insert_source(db, bank_id, "sr4", is_enabled=False,
@@ -430,9 +369,6 @@ def test_stale_disabled_source_ignored(db):
     db.commit()
     alerts = check_stale_rates(db, stale_hours=1)
     assert not any(a["source_id"] == src_id for a in alerts)
-
-
-# ── run_all_checks ────────────────────────────────────────────────────────────
 
 def test_run_all_checks_returns_list(db):
     alerts = run_all_checks(db, since_hours=1, stale_hours=1)

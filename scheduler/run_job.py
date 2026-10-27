@@ -1,16 +1,3 @@
-"""
-scheduler/run_job.py — daily collection entry point.
-
-Usage:
-    python3 scheduler/run_job.py
-
-Exit codes:
-    0  at least one source succeeded
-    1  every source failed (cron/systemd can alert on this)
-
-Logs to stdout and to logs/collection.log (appended).
-DATABASE_URL env var overrides default DSN (dbname=exchange_rates).
-"""
 import logging
 import os
 import sys
@@ -22,8 +9,6 @@ import psycopg2
 from scheduler.runner import run_all
 from scheduler.health import quick_health_check
 from scheduler.control import CollectionControl
-
-# ── logging ───────────────────────────────────────────────────────────────────
 
 LOG_DIR = Path(__file__).parent.parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -38,9 +23,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("run_job")
 
-
-# ── main ──────────────────────────────────────────────────────────────────────
-
 def main():
     dsn = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
     started = datetime.now(timezone.utc).isoformat()
@@ -53,22 +35,20 @@ def main():
         sys.exit(1)
 
     try:
-        # Check if collection is paused
         control = CollectionControl(conn)
         if control.is_paused():
             pause_info = control.get_pause_info()
-            log.warning("collection paused by=%s reason=%s", 
-                       pause_info.get('paused_by'), 
+            log.warning("collection paused by=%s reason=%s",
+                       pause_info.get('paused_by'),
                        pause_info.get('reason'))
             return
-        
-        # Run health check
+
         if not quick_health_check(conn):
             log.error("health check failed - aborting collection")
             sys.exit(1)
-        
+
         log.info("health check passed - starting collection")
-        
+
         results = run_all(conn)
     finally:
         conn.close()
@@ -91,11 +71,9 @@ def main():
         total, succeeded, failed, skipped,
     )
 
-    # Exit 1 only if every source failed (partial success is still success)
     if succeeded == 0 and total > 0:
         log.error("all sources failed — check alerts")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

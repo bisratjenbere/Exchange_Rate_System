@@ -1,8 +1,3 @@
-"""
-adapters/amhara/adapter.py — Amhara Bank.
-
-MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
-"""
 import re
 from datetime import datetime, date
 from typing import Optional
@@ -19,69 +14,45 @@ SSL_VERIFY = False
 
 _CODE_RE = re.compile(r"\(\s*([A-Z]{3})\s*\)", re.IGNORECASE)
 
-
 class AmharaAdapter(FieldStructureMixin, HTMLTableAdapter):
-    """
-    Amhara Bank adapter with field detection.
-    
-    Type D adapter (2-table HTML with shared date).
-    Field Structure: Table cells → dict with category prefixes
-    """
-    
+
     FIELD_CONFIG = {}
-    
+
     def get_source_url(self) -> str:
-        """Return Amhara Bank website URL."""
         return SOURCE_URL
-    
+
     def get_adapter_key(self) -> str:
-        """Return unique adapter identifier."""
         return ADAPTER_KEY
-    
+
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
-        """
-        Extract AdapterRecords from Amhara Bank HTML tables using field detection.
-        
-        Args:
-            soup: BeautifulSoup parsed HTML
-            tables: List of table elements (expecting 2 tables)
-            **options: Not used for Amhara
-            
-        Returns:
-            ParseResult with extracted records and any errors
-        """
         result = ParseResult()
-        
-        # Extract date from page text
+
         effective_date = _parse_date(soup)
         date_basis = "source_published" if effective_date else "collection_date_fallback"
-        
+
         if not tables:
             result.add_error("table_0_cash_txn:missing")
             result.add_error("table_1_weighted_avg:missing")
             return result
-        
-        # Parse table 0 — cash + transactional
+
         try:
             records = self._parse_cash_txn(tables[0], effective_date, date_basis)
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0_cash_txn:{exc}")
-        
-        # Parse table 1 — weighted average
+
         if len(tables) < 2:
             result.add_error("table_1_weighted_avg:missing")
         else:
             try:
-                records = self._parse_weighted(tables[1], effective_date, date_basis)
+                records = self._parse_weighted(tables[1], effective_date, date_basis, **options)
                 result.records.extend(records)
             except Exception as exc:
                 result.add_error(f"table_1_weighted_avg:{exc}")
-        
+
         return result
-    
+
     def _parse_cash_txn(self, table, effective_date, date_basis) -> list:
-        """Parse cash + transactional table using field detection."""
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
         for row in rows:
@@ -91,16 +62,14 @@ class AmharaAdapter(FieldStructureMixin, HTMLTableAdapter):
             currency_code, currency_name = _parse_name_code(cells[1])
             if not currency_code:
                 continue
-            
-            # Create dict with category prefixes
+
             row_dict = {
                 "cash_buying": cells[2],
                 "cash_selling": cells[3],
                 "transactional_buying": cells[4],
                 "transactional_selling": cells[5],
             }
-            
-            # Use field detection
+
             detected_records = self.detect_and_emit(
                 data=row_dict,
                 currency=currency_code,
@@ -109,14 +78,17 @@ class AmharaAdapter(FieldStructureMixin, HTMLTableAdapter):
                 effective_date_basis=date_basis,
                 mapping_notes=["ssl_verify_false:access_finding_recorded"]
             )
-            
+
             records.extend(detected_records)
         return records
-    
-    def _parse_weighted(self, table, effective_date, date_basis) -> list:
-        """Parse weighted average table using field detection."""
+
+    def _parse_weighted(self, table, effective_date, date_basis, **options) -> list:
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
+        table_category = self.extract_table_category(table)
+        if table_category == "UNKNOWN":
+            table_category = normalize_category(options.get("category", "weighted_average"))
+
         for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
             if len(cells) < 4:
@@ -124,14 +96,12 @@ class AmharaAdapter(FieldStructureMixin, HTMLTableAdapter):
             currency_code, currency_name = _parse_name_code(cells[1])
             if not currency_code:
                 continue
-            
-            # Create dict with generic field names
+
             row_dict = {
                 "buying": cells[2],
                 "selling": cells[3],
             }
-            
-            # Use field detection
+
             detected_records = self.detect_and_emit(
                 data=row_dict,
                 currency=currency_code,
@@ -140,18 +110,15 @@ class AmharaAdapter(FieldStructureMixin, HTMLTableAdapter):
                 effective_date_basis=date_basis,
                 mapping_notes=["ssl_verify_false:access_finding_recorded"]
             )
-            
-            # Context-based category override: this table is weighted_average
+
             for rec in detected_records:
                 if rec.category == 'UNKNOWN':
-                    rec.category = normalize_category("weighted_average")
-            
+                    rec.category = table_category
+
             records.extend(detected_records)
         return records
 
-
 def _parse_date(soup) -> Optional[date]:
-    """Extract date from page text."""
     text = re.sub(r'\s+', ' ', soup.get_text(" "))
     m = re.search(r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}', text)
     if m:
@@ -163,9 +130,7 @@ def _parse_date(soup) -> Optional[date]:
                 pass
     return None
 
-
 def _parse_name_code(text: str) -> tuple:
-    """Extract currency code from 'Currency Name (USD)' format."""
     m = _CODE_RE.search(text)
     if m:
         code = m.group(1).upper()
@@ -174,38 +139,10 @@ def _parse_name_code(text: str) -> tuple:
     text = text.strip()
     return (text, None) if text else ("", None)
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Backward Compatibility Wrappers
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def parse(raw_html: str) -> tuple:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use AmharaAdapter().parse().
-    
-    Args:
-        raw_html: Raw HTML string from Amhara Bank website
-        
-    Returns:
-        Tuple of (records, errors) for backward compatibility
-    """
     adapter = AmharaAdapter()
     result = adapter.parse(raw_html)
     return result.records, result.errors
 
-
 def schema_fingerprint(raw_html: str) -> str:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use AmharaAdapter().schema_fingerprint().
-    
-    Args:
-        raw_html: Raw HTML string from Amhara Bank website
-        
-    Returns:
-        SHA256 hash of table structure
-    """
     return AmharaAdapter().schema_fingerprint(raw_html)

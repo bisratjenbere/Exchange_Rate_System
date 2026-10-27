@@ -12,7 +12,10 @@ lxml==4.9.3
 # HTTP Requests
 requests==2.31.0
 
-# Browser Automation (for JS-rendered sources)
+# Cloudflare Bypass (for bot-protected sites)
+cloudscraper==1.2.71
+
+# Browser Automation (for JS-rendered sources & advanced Cloudflare bypass)
 playwright==1.44.0
 
 # Metrics & Monitoring

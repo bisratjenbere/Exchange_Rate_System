@@ -1,26 +1,9 @@
-"""
-alerts/checker.py — alert conditions for the exchange rate system.
-
-Four alert types (per execution-order.md Phase 7 step 26):
-  1. failed_run        — a collection run finished with status='failed'
-  2. schema_change     — a raw_capture row with reason='schema_change' in the last window
-  3. disappearing_data — an enabled source returned 0 records_found on its last run
-  4. stale_rates       — no successful run for an enabled source within staleness_hours
-
-Each check returns a list of alert dicts:
-  { "type": str, "source_id": int, "detail": str }
-
-An empty list means no alerts for that check.
-"""
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-
-STALE_HOURS_DEFAULT = 26  # slightly over 24 h to allow for scheduling jitter
-
+STALE_HOURS_DEFAULT = 26
 
 def check_failed_runs(conn, since_hours: int = 24) -> list:
-    """Alert for any run that finished with status='failed' in the last since_hours."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     with conn.cursor() as cur:
         cur.execute(
@@ -40,9 +23,7 @@ def check_failed_runs(conn, since_hours: int = 24) -> list:
         for r in rows
     ]
 
-
 def check_schema_changes(conn, since_hours: int = 24) -> list:
-    """Alert for any raw_capture with reason='schema_change' in the last since_hours."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     with conn.cursor() as cur:
         cur.execute(
@@ -63,12 +44,7 @@ def check_schema_changes(conn, since_hours: int = 24) -> list:
         for r in rows
     ]
 
-
 def check_disappearing_data(conn) -> list:
-    """
-    Alert when an enabled source's most recent finished run returned records_found=0.
-    Gap review G: disappearing data triggers completeness warning.
-    """
     with conn.cursor() as cur:
         cur.execute(
             """SELECT DISTINCT ON (cr.source_id)
@@ -91,12 +67,7 @@ def check_disappearing_data(conn) -> list:
         if r[3] == 0
     ]
 
-
 def check_stale_rates(conn, stale_hours: int = STALE_HOURS_DEFAULT) -> list:
-    """
-    Alert when an enabled source has had no successful run within stale_hours.
-    Covers sources that have never run (last_success_at IS NULL).
-    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=stale_hours)
     with conn.cursor() as cur:
         cur.execute(
@@ -120,10 +91,8 @@ def check_stale_rates(conn, stale_hours: int = STALE_HOURS_DEFAULT) -> list:
         for r in rows
     ]
 
-
 def run_all_checks(conn, since_hours: int = 24,
                    stale_hours: int = STALE_HOURS_DEFAULT) -> list:
-    """Run all four checks and return combined alert list."""
     alerts = []
     alerts.extend(check_failed_runs(conn, since_hours=since_hours))
     alerts.extend(check_schema_changes(conn, since_hours=since_hours))

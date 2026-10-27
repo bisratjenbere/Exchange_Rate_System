@@ -1,9 +1,3 @@
-"""
-tests/test_m10_ingest_scheduler.py — ingest pipeline and scheduler runner.
-
-All tests use fixtures and mocks — no live network calls.
-DB tests use the real test database (same pattern as test_m7).
-"""
 import hashlib
 import json
 import pytest
@@ -18,9 +12,6 @@ from tests.db_utils import get_conn, reset_schema, apply_migrations
 from domain.records import AdapterRecord
 from pipeline.ingest import ingest, IngestResult
 
-
-# ── DB fixture ────────────────────────────────────────────────────────────────
-
 @pytest.fixture(scope="module")
 def db():
     conn = get_conn()
@@ -29,7 +20,6 @@ def db():
     yield conn
     conn.close()
 
-
 def _make_bank(conn, code):
     with conn.cursor() as cur:
         cur.execute(
@@ -37,7 +27,6 @@ def _make_bank(conn, code):
             (code, f"Bank {code}"),
         )
         return cur.fetchone()[0]
-
 
 def _make_source(conn, bank_id, adapter_key="tst"):
     with conn.cursor() as cur:
@@ -50,9 +39,7 @@ def _make_source(conn, bank_id, adapter_key="tst"):
         )
         return cur.fetchone()[0]
 
-
 def _make_run(conn, source_id):
-    """Insert a running run. Caller must finish it (or it blocks the next _make_run)."""
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO collection_run (source_id, started_at, status)
@@ -63,7 +50,6 @@ def _make_run(conn, source_id):
     conn.commit()
     return run_id
 
-
 def _finish_run(conn, run_id):
     with conn.cursor() as cur:
         cur.execute(
@@ -71,7 +57,6 @@ def _finish_run(conn, run_id):
             (run_id,),
         )
     conn.commit()
-
 
 def _record(currency="USD", buying="165.00", selling="167.00",
             category="cash", date_basis="source_published",
@@ -83,12 +68,9 @@ def _record(currency="USD", buying="165.00", selling="167.00",
         selling_rate=Decimal(selling) if selling else None,
         effective_date=effective_date or date(2026, 10, 10),
         effective_date_basis=date_basis,
-        source_record_key=f"key-{currency}",   # unique per currency
+        source_record_key=f"key-{currency}",
         source_rate_text=f"{buying}/{selling}",
     )
-
-
-# ── ingest: basic acceptance ──────────────────────────────────────────────────
 
 def test_ingest_new_record_accepted(db):
     bank_id = _make_bank(db, "IG1")
@@ -102,7 +84,6 @@ def test_ingest_new_record_accepted(db):
     assert result.accepted == 1
     assert result.rejected == 0
     assert result.duplicates == 0
-
 
 def test_ingest_duplicate_skipped(db):
     bank_id = _make_bank(db, "IG2")
@@ -122,10 +103,39 @@ def test_ingest_duplicate_skipped(db):
     assert result.duplicates == 1
     assert result.accepted == 0
 
+def test_ingest_intraday_update_auto_promoted(db):
+    bank_id = _make_bank(db, "IG3A")
+    src_id = _make_source(db, bank_id, "ig3a")
+    run_id = _make_run(db, src_id)
 
-def test_ingest_changed_value_creates_candidate(db):
-    bank_id = _make_bank(db, "IG3")
-    src_id = _make_source(db, bank_id, "ig3")
+    rec1 = _record(currency="GBP", buying="165.00", selling="167.00")
+    res1 = ingest(db, [rec1], src_id, run_id)
+    db.commit()
+    _finish_run(db, run_id)
+    assert res1.accepted == 1
+
+    run_id2 = _make_run(db, src_id)
+    rec2 = _record(currency="GBP", buying="166.00", selling="168.00")
+    result = ingest(db, [rec2], src_id, run_id2)
+    db.commit()
+    _finish_run(db, run_id2)
+
+    assert result.candidates == 0
+    assert result.accepted == 1
+
+    cur = db.cursor()
+    cur.execute("SELECT id, is_current, version_number, supersedes_id FROM rate_observation WHERE source_id=%s ORDER BY id", (src_id,))
+    rows = cur.fetchall()
+    assert len(rows) == 2
+    assert rows[0][1] is False
+    assert rows[0][2] == 1
+    assert rows[1][1] is True
+    assert rows[1][2] == 2
+    assert rows[1][3] == rows[0][0]
+
+def test_ingest_intraday_anomaly_quarantined(db):
+    bank_id = _make_bank(db, "IG3B")
+    src_id = _make_source(db, bank_id, "ig3b")
     run_id = _make_run(db, src_id)
 
     rec1 = _record(currency="GBP", buying="165.00", selling="167.00")
@@ -134,14 +144,20 @@ def test_ingest_changed_value_creates_candidate(db):
     _finish_run(db, run_id)
 
     run_id2 = _make_run(db, src_id)
-    rec2 = _record(currency="GBP", buying="166.00", selling="168.00")
-    result = ingest(db, [rec2], src_id, run_id2)
+    rec2_anomaly = _record(currency="GBP", buying="168.00", selling="165.00")
+    result = ingest(db, [rec2_anomaly], src_id, run_id2)
     db.commit()
     _finish_run(db, run_id2)
 
     assert result.candidates == 1
-    assert result.accepted == 0   # candidate is not current
+    assert result.accepted == 0
 
+    cur = db.cursor()
+    cur.execute("SELECT id, is_current FROM rate_observation WHERE source_id=%s ORDER BY id", (src_id,))
+    rows = cur.fetchall()
+    assert len(rows) == 2
+    assert rows[0][1] is True
+    assert rows[1][1] is False
 
 def test_ingest_rejected_record_counted(db):
     bank_id = _make_bank(db, "IG4")
@@ -152,7 +168,7 @@ def test_ingest_rejected_record_counted(db):
         source_currency_code="JPY",
         category="cash",
         buying_rate=None,
-        selling_rate=None,   # both None → rejected
+        selling_rate=None,
         effective_date=date(2026, 10, 10),
         effective_date_basis="source_published",
     )
@@ -162,7 +178,6 @@ def test_ingest_rejected_record_counted(db):
 
     assert result.rejected == 1
     assert result.accepted == 0
-
 
 def test_ingest_unknown_category_flagged(db):
     bank_id = _make_bank(db, "IG5")
@@ -177,7 +192,6 @@ def test_ingest_unknown_category_flagged(db):
     assert result.flagged == 1
     assert result.accepted == 0
 
-
 def test_ingest_ambiguous_identity_flagged(db):
     bank_id = _make_bank(db, "IG6")
     src_id = _make_source(db, bank_id, "ig6")
@@ -191,20 +205,17 @@ def test_ingest_ambiguous_identity_flagged(db):
 
     assert result.flagged == 1
 
-
 def test_ingest_suspicious_data_flagged(db):
     bank_id = _make_bank(db, "IG7")
     src_id = _make_source(db, bank_id, "ig7")
     run_id = _make_run(db, src_id)
 
-    # buying > selling
     rec = _record(currency="AED", buying="168.00", selling="165.00")
     result = ingest(db, [rec], src_id, run_id)
     db.commit()
     _finish_run(db, run_id)
 
     assert result.suspicious is True
-
 
 def test_ingest_multiple_records_mixed(db):
     bank_id = _make_bank(db, "IG8")
@@ -230,7 +241,6 @@ def test_ingest_multiple_records_mixed(db):
     assert result.accepted == 2
     assert result.rejected == 1
 
-
 def test_ingest_empty_list(db):
     bank_id = _make_bank(db, "IG9")
     src_id = _make_source(db, bank_id, "ig9")
@@ -244,28 +254,21 @@ def test_ingest_empty_list(db):
     assert result.rejected == 0
     assert result.duplicates == 0
 
-
-# ── scheduler/runner ──────────────────────────────────────────────────────────
-
 from scheduler.runner import (
     run_source, run_all, _load_adapter, _parse, _run_status, _classify_error,
 )
-
 
 def test_load_adapter_cbe():
     adapter = _load_adapter("cbe_api")
     assert hasattr(adapter, "parse")
 
-
 def test_load_adapter_adib():
     adapter = _load_adapter("adib_api")
     assert hasattr(adapter, "parse")
 
-
 def test_load_adapter_unknown_raises():
     with pytest.raises(ImportError):
         _load_adapter("nonexistent_bank_xyz")
-
 
 def test_parse_plain_list():
     mock_adapter = MagicMock()
@@ -273,28 +276,23 @@ def test_parse_plain_list():
     result = _parse(mock_adapter, "raw")
     assert len(result) == 1
 
-
 def test_parse_tuple_return():
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = ([_record()], ["err1"])
     result = _parse(mock_adapter, "raw")
     assert len(result) == 1
 
-
 def test_run_status_all_accepted():
     r = IngestResult(accepted=5)
     assert _run_status(r) == "success"
-
 
 def test_run_status_some_rejected():
     r = IngestResult(accepted=3, rejected=1)
     assert _run_status(r) == "partial_success"
 
-
 def test_run_status_all_rejected():
     r = IngestResult(accepted=0, rejected=3)
     assert _run_status(r) == "failed"
-
 
 def test_classify_error_http():
     import requests
@@ -302,21 +300,17 @@ def test_classify_error_http():
     code, _ = _classify_error(exc)
     assert code == "http_failure"
 
-
 def test_classify_error_parse():
     exc = ValueError("bad html")
     code, _ = _classify_error(exc)
     assert code == "parse_failure"
-
 
 def test_classify_error_schema():
     exc = ValueError("Schema fingerprint changed")
     code, _ = _classify_error(exc)
     assert code == "schema_change"
 
-
 def test_run_source_success(db):
-    """run_source with a mocked fetch and adapter."""
     bank_id = _make_bank(db, "RS1")
     src_id = _make_source(db, bank_id, "rs1")
     db.commit()
@@ -334,7 +328,6 @@ def test_run_source_success(db):
     assert result["status"] in ("success", "partial_success")
     assert result["accepted"] >= 0
 
-
 def test_run_source_http_failure(db):
     bank_id = _make_bank(db, "RS2")
     src_id = _make_source(db, bank_id, "rs2")
@@ -347,7 +340,6 @@ def test_run_source_http_failure(db):
 
     assert result["status"] == "failed"
     assert result["error_code"] == "http_failure"
-
 
 def test_run_source_parse_failure(db):
     bank_id = _make_bank(db, "RS3")
@@ -365,11 +357,9 @@ def test_run_source_parse_failure(db):
     assert result["status"] == "failed"
     assert result["error_code"] == "parse_failure"
 
-
 def test_run_source_not_found(db):
     result = run_source(db, 999999)
     assert result["status"] == "error"
-
 
 def test_run_all_iterates_enabled(db):
     bank_id = _make_bank(db, "RA1")
@@ -382,7 +372,7 @@ def test_run_all_iterates_enabled(db):
     with patch("scheduler.runner._fetch", return_value=("{}", 200)), \
          patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
          patch("scheduler.runner._check_schema"), \
-         patch("scheduler.runner.time.sleep"):   # skip rate-limit delay in tests
+         patch("scheduler.runner.time.sleep"):
         results = run_all(db)
 
     assert isinstance(results, list)

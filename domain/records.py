@@ -1,9 +1,7 @@
-"""AdapterRecord — the fixed output contract every adapter must produce."""
 from dataclasses import dataclass, field
 from decimal import Decimal
 from datetime import date
 from typing import Optional
-
 
 UNKNOWN_CATEGORY = "UNKNOWN"
 VALID_CATEGORIES = frozenset(
@@ -13,12 +11,11 @@ VALID_DATE_BASES = frozenset(
     {"source_published", "source_inferred", "collection_date_fallback", "unknown"}
 )
 
-
 @dataclass
 class AdapterRecord:
     source_currency_code: str
-    effective_date_basis: str          # one of VALID_DATE_BASES
-    category: str                      # one of VALID_CATEGORIES
+    effective_date_basis: str
+    category: str
     currency_name: Optional[str] = None
     buying_rate: Optional[Decimal] = None
     selling_rate: Optional[Decimal] = None

@@ -1,17 +1,3 @@
-"""
-adapters/berhan/adapter.py — Berhan Bank (Type G text extraction).
-
-Parse rules:
-- No table. Rates in page text: "1 CODE (symbol) buying selling".
-- Date in text: "Oct 12, 2026" → source_published.
-- Pattern: "1 USD ($) 161.7225 164.9570"
-- Single buying/selling pair — category UNKNOWN (unconfirmed).
-- unit_multiplier = 1 (confirmed from "1 CODE" prefix).
-- "No Trade" → None.
-- Partial failure: returns (records, errors). Never raises.
-
-MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
-"""
 import re
 from datetime import date
 from typing import Optional
@@ -32,101 +18,63 @@ _MONTH_MAP = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
-# Matches: "1 USD ($) 161.7225 164.9570" or "1 AED 44.0325 44.9131"
 _RATE_RE = re.compile(
     r"1\s+([A-Z]{3})\s*(?:\([^)]*\))?\s+([\d.]+|No Trade)\s+([\d.]+|No Trade)",
     re.IGNORECASE,
 )
 
-
 class BerhanAdapter(FieldStructureMixin, HTMLTextAdapter):
-    """
-    Berhan Bank adapter with field detection.
-    
-    Type G adapter that extracts rates from text patterns.
-    Field Structure: Generic fields → transactional (context-based)
-    """
-    
+
     FIELD_CONFIG = {}
-    
+
     def get_source_url(self) -> str:
-        """Return Berhan Bank source URL."""
         return SOURCE_URL
-    
+
     def get_adapter_key(self) -> str:
-        """Return adapter key identifier."""
         return ADAPTER_KEY
-    
+
     def requires_category(self) -> bool:
-        """Type G adapter requires category parameter."""
         return True
-    
+
     def _extract_from_text(self, text: str, soup: BeautifulSoup, **options) -> ParseResult:
-        """
-        Extract AdapterRecords from normalized HTML text using regex patterns and field detection.
-        
-        Args:
-            text: Normalized text with single-space separation
-            soup: BeautifulSoup parsed HTML (unused for Berhan)
-            **options: Must contain 'category' parameter
-            
-        Returns:
-            ParseResult containing extracted records and any errors
-        """
         result = ParseResult()
-        
-        # Extract category from options (default to transactional for single pair)
-        category = options.get("category", "transactional")
-        
-        # Extract effective date from text
+
+        category = normalize_category(options.get("category", "UNKNOWN"))
+
         effective_date = _extract_date(text)
         date_basis = "source_published" if effective_date else "collection_date_fallback"
-        
+
         seen = set()
-        # Extract rates using regex pattern
         for m in _RATE_RE.finditer(text):
             code = m.group(1).upper()
             if code in seen:
                 continue
             seen.add(code)
             try:
-                # Create dict with generic field names
                 row_dict = {
                     "buying": m.group(2),
                     "selling": m.group(3),
                 }
-                
-                # Use field detection
-                detected_records = self.detect_and_emit(
-                    data=row_dict,
-                    currency=code,
-                    effective_date=effective_date,
-                    effective_date_basis=date_basis,
-                    mapping_notes=["category_unknown:single_pair_unconfirmed"]
-                )
-                
-                # Context-based category override
-                for rec in detected_records:
-                    if rec.category == 'UNKNOWN':
-                        rec.category = normalize_category(category)
-                
-                result.records.extend(detected_records)
-                
+
+                cats_to_assign = ["cash", "transactional"] if category != "UNKNOWN" else ["UNKNOWN"]
+                for cat_name in cats_to_assign:
+                    detected_records = self.detect_and_emit(
+                        data=row_dict,
+                        currency=code,
+                        effective_date=effective_date,
+                        effective_date_basis=date_basis,
+                        mapping_notes=["berhan:cash_and_transaction_published"]
+                    )
+                    for rec in detected_records:
+                        rec.category = cat_name
+                    result.records.extend(detected_records)
+
             except Exception as exc:
                 result.add_error(f"currency:{code}:{exc}")
-        
+
         return result
-    
+
     def schema_fingerprint(self, raw_content: str) -> str:
-        """
-        Generate schema fingerprint based on text markers.
-        
-        Args:
-            raw_content: Raw HTML string
-            
-        Returns:
-            SHA256 hex digest of structural markers
-        """
         try:
             import hashlib
             soup = BeautifulSoup(raw_content, "html.parser")
@@ -138,9 +86,7 @@ class BerhanAdapter(FieldStructureMixin, HTMLTextAdapter):
             import hashlib
             return hashlib.sha256(b"berhan:unparseable").hexdigest()
 
-
 def _extract_date(text: str) -> Optional[date]:
-    """Extract date from text using month name pattern."""
     m = _DATE_RE.search(text)
     if not m:
         return None
@@ -152,39 +98,10 @@ def _extract_date(text: str) -> Optional[date]:
     except ValueError:
         return None
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Backward Compatibility Wrappers
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def parse(raw_html: str, category: str = "UNKNOWN") -> tuple:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use BerhanAdapter().parse().
-    
-    Args:
-        raw_html: Raw HTML string from Berhan Bank
-        category: Rate category (defaults to "UNKNOWN")
-        
-    Returns:
-        Tuple of (records, errors) for backward compatibility
-    """
     adapter = BerhanAdapter()
     result = adapter.parse(raw_html, category=category)
     return result.records, result.errors
 
-
 def schema_fingerprint(raw_html: str) -> str:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use BerhanAdapter().schema_fingerprint().
-    
-    Args:
-        raw_html: Raw HTML string
-        
-    Returns:
-        SHA256 hex digest of structural signature
-    """
     return BerhanAdapter().schema_fingerprint(raw_html)

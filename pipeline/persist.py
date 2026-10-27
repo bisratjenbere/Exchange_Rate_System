@@ -1,11 +1,3 @@
-"""
-pipeline/persist.py — version and correction transaction.
-LOCKED rules:
-- Confirmed corrections: single transaction, serialization, supersedes_id link, atomic current switch.
-- Changed values → change_candidate, not automatic correction.
-- History is immutable.
-- Ambiguous identity: stored with identity_status=ambiguous, no version_number.
-"""
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,7 +6,6 @@ from domain.records import AdapterRecord
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from pipeline.fingerprint import FINGERPRINT_VERSION
 from pipeline.normalize import normalize_currency_code
-
 
 def insert_observation(
     conn,
@@ -32,8 +23,8 @@ def insert_observation(
     is_current: bool,
     change_review_status: ChangeReviewStatus = ChangeReviewStatus.NOT_REQUIRED,
     supersedes_id: Optional[int] = None,
+    is_fallback: bool = False,
 ) -> int:
-    """Insert one rate_observation row. Returns the new id."""
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO rate_observation (
@@ -46,7 +37,7 @@ def insert_observation(
                    version_number, is_current, identity_status,
                    validation_status, validation_messages,
                    change_review_status, logical_observation_key,
-                   supersedes_id
+                   supersedes_id, is_fallback
                ) VALUES (
                    %s, %s, %s,
                    %s, %s, %s,
@@ -57,7 +48,7 @@ def insert_observation(
                    %s, %s, %s,
                    %s, %s,
                    %s, %s,
-                   %s
+                   %s, %s
                ) RETURNING id""",
             (
                 source_id, run_id, category_id,
@@ -73,14 +64,12 @@ def insert_observation(
                 validation_status.value,
                 json.dumps(validation_messages) if validation_messages else None,
                 change_review_status.value, logical_key,
-                supersedes_id,
+                supersedes_id, is_fallback,
             ),
         )
         return cur.fetchone()[0]
 
-
 def insert_change_candidate(conn, observation_id: int, prior_version_id: int, source_id: int):
-    """Create a change_candidate row for a changed-value observation."""
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO change_candidate
@@ -88,7 +77,6 @@ def insert_change_candidate(conn, observation_id: int, prior_version_id: int, so
                VALUES (%s, %s, %s, 'open')""",
             (observation_id, prior_version_id, source_id),
         )
-
 
 def commit_correction(
     conn,
@@ -104,16 +92,7 @@ def commit_correction(
     fetched_at: datetime,
     prior_version_number: int,
 ) -> int:
-    """
-    Atomic correction transaction (LOCKED §7):
-    1. Lock prior row (serialization).
-    2. Insert new version with supersedes_id.
-    3. Mark prior non-current.
-    4. Mark new current.
-    Returns new observation id.
-    """
     with conn.cursor() as cur:
-        # Serialization lock
         cur.execute(
             "SELECT id, logical_observation_key FROM rate_observation WHERE id = %s FOR UPDATE",
             (prior_obs_id,),
@@ -126,7 +105,6 @@ def commit_correction(
 
         new_version = prior_version_number + 1
 
-        # Insert new version (not yet current)
         cur.execute(
             """INSERT INTO rate_observation (
                    source_id, collection_run_id, category_id,
@@ -170,7 +148,6 @@ def commit_correction(
         )
         new_id = cur.fetchone()[0]
 
-        # Atomic current switch
         cur.execute(
             "UPDATE rate_observation SET is_current = FALSE WHERE id = %s",
             (prior_obs_id,),
@@ -181,9 +158,7 @@ def commit_correction(
         )
     return new_id
 
-
 def get_next_version_number(conn, logical_key: str) -> int:
-    """Return the next version number for a logical key (max existing + 1, or 1)."""
     with conn.cursor() as cur:
         cur.execute(
             """SELECT COALESCE(MAX(version_number), 0)

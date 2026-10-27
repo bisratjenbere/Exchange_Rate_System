@@ -1,21 +1,3 @@
-"""
-adapters/zamzam/adapter.py — ZamZam Bank (2-table HTML).
-
-Parse rules:
-- Table 0: Cash + Transaction — multi-level header
-  Row 0: Currency | Cash | Transaction
-  Row 1: Buying | Selling | Buying | Selling
-  Data: "CODE – Name" | cash_buy | cash_sell | txn_buy | txn_sell
-- Table 1: Weighted Average — "CODE – Name" | Buying | Selling
-  Header row 0: "Currency Code | Weighted Average Daily Exchange Rates"
-  Header row 1: Buying | Selling
-- Date in page text: "October 13, 2026" → source_published.
-- "No Trade" → None.
-- Currency format: "CODE – Name" → extract code as first token before " –".
-- Partial failure: returns (records, errors). Never raises.
-
-MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
-"""
 import re
 from datetime import date
 from typing import Optional
@@ -36,56 +18,46 @@ _MONTH_MAP = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
-
 class ZamzamAdapter(FieldStructureMixin, HTMLTableAdapter):
-    """ZamZam Bank adapter - 2 tables (cash/transactional + weighted_average).
-    
-    Field Structure: Table cells → dict with category prefixes
-    - Table 0: cash_buying/cash_selling + transactional_buying/transactional_selling
-    - Table 1: buying/selling → weighted_average (context-based)
-    """
-    
-    # Empty config - field detection discovers all patterns
+
     FIELD_CONFIG = {}
-    
+
     def get_source_url(self) -> str:
         return SOURCE_URL
-    
+
     def get_adapter_key(self) -> str:
         return ADAPTER_KEY
-    
+
     def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
-        """Process 2 tables from ZamZam Bank with date extraction."""
         result = ParseResult()
-        
+
         text = soup.get_text(" ", strip=True)
         effective_date = _extract_date(text)
         date_basis = "source_published" if effective_date else "collection_date_fallback"
-        
+
         if len(tables) < 1:
             result.add_error("table_0:missing")
             result.add_error("table_1:missing")
             return result
-        
+
         try:
             records = self._parse_cash_txn(tables[0], effective_date, date_basis)
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0_cash_txn:{exc}")
-        
+
         if len(tables) < 2:
             result.add_error("table_1_weighted:missing")
         else:
             try:
-                records = self._parse_weighted(tables[1], effective_date, date_basis)
+                records = self._parse_weighted(tables[1], effective_date, date_basis, **kwargs)
                 result.records.extend(records)
             except Exception as exc:
                 result.add_error(f"table_1_weighted:{exc}")
-        
+
         return result
-    
+
     def _parse_cash_txn(self, table, effective_date, date_basis: str) -> list:
-        """Parse table 0 with cash and transactional columns using field detection."""
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
         for row in rows:
@@ -95,30 +67,31 @@ class ZamzamAdapter(FieldStructureMixin, HTMLTableAdapter):
             code = _parse_code(cells[0])
             if not code:
                 continue
-            
-            # Create dict with explicit category prefixes for field detection
+
             row_dict = {
                 "cash_buying": cells[1],
                 "cash_selling": cells[2],
                 "transactional_buying": cells[3],
                 "transactional_selling": cells[4],
             }
-            
-            # Use field detection to automatically discover and emit records
+
             detected_records = self.detect_and_emit(
                 data=row_dict,
                 currency=code,
                 effective_date=effective_date,
                 effective_date_basis=date_basis
             )
-            
+
             records.extend(detected_records)
         return records
-    
-    def _parse_weighted(self, table, effective_date, date_basis: str) -> list:
-        """Parse table 1 with weighted_average columns using field detection."""
+
+    def _parse_weighted(self, table, effective_date, date_basis: str, **kwargs) -> list:
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
+        table_category = self.extract_table_category(table)
+        if table_category == "UNKNOWN":
+            table_category = normalize_category(kwargs.get("category", "weighted_average"))
+
         for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
             if len(cells) < 3:
@@ -126,41 +99,34 @@ class ZamzamAdapter(FieldStructureMixin, HTMLTableAdapter):
             code = _parse_code(cells[0])
             if not code:
                 continue
-            
-            # Create dict with generic field names
+
             row_dict = {
                 "buying": cells[1],
                 "selling": cells[2],
             }
-            
-            # Use field detection
+
             detected_records = self.detect_and_emit(
                 data=row_dict,
                 currency=code,
                 effective_date=effective_date,
                 effective_date_basis=date_basis
             )
-            
-            # Context-based category override: this table is weighted_average
+
             for rec in detected_records:
                 if rec.category == 'UNKNOWN':
-                    rec.category = normalize_category("weighted_average")
-            
+                    rec.category = table_category
+
             records.extend(detected_records)
         return records
 
-
 def _parse_code(text: str) -> str:
-    """'USD – Us Dollar' → 'USD'. Returns '' if unparseable."""
     text = text.strip()
     for sep in [" –", " -", " —"]:
         if sep in text:
             return text.split(sep)[0].strip()
     return text.split()[0] if text else ""
 
-
 def _extract_date(text: str) -> Optional[date]:
-    """Extract date from text in format like 'October 13, 2026'."""
     for m in _DATE_RE.finditer(text):
         month = _MONTH_MAP.get(m.group(1).lower())
         if not month:
@@ -173,18 +139,11 @@ def _extract_date(text: str) -> Optional[date]:
             continue
     return None
 
-
-# ============================================================================
-# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
-# ============================================================================
-
 _adapter_instance = ZamzamAdapter()
 
 def parse(raw_html: str) -> tuple:
-    """Parse ZamZam Bank HTML into records. Module-level wrapper."""
     result = _adapter_instance.parse(raw_html)
     return result.records, result.errors
 
 def schema_fingerprint(raw_html: str) -> str:
-    """Generate schema fingerprint. Module-level wrapper."""
     return _adapter_instance.schema_fingerprint(raw_html)

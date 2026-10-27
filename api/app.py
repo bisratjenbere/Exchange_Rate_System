@@ -1,19 +1,3 @@
-"""
-api/app.py — read API for trusted exchange rates.
-
-Endpoints (JSON):
-  GET /health
-  GET /banks
-  GET /rates
-  GET /rates?source_id=<id>
-  GET /rates/<source_id>
-  GET /rates/by-currency/<code>
-
-UI:
-  GET /   ?view=compare  &currency=USD  &filter=major|all  &q=<search>
-          ?view=bank     &source_id=1   &filter=major|all  &q=<search>  &show_all=1
-          ?view=all                     &filter=major|all  &q=<search>
-"""
 import os
 import decimal
 import datetime
@@ -46,15 +30,13 @@ from trusted_view.query import (
 
 app = Flask(__name__)
 
-# ── Environment validation ─────────────────────────────────────────────────────
 DSN = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
 if DSN.startswith("postgres://"):
     DSN = DSN.replace("postgres://", "postgresql://", 1)
 
-DB_CONNECT_TIMEOUT = int(os.environ.get("DB_CONNECT_TIMEOUT", "5"))   # seconds
-DB_STATEMENT_TIMEOUT = int(os.environ.get("DB_STATEMENT_TIMEOUT", "10000"))  # ms
+DB_CONNECT_TIMEOUT = int(os.environ.get("DB_CONNECT_TIMEOUT", "5"))
+DB_STATEMENT_TIMEOUT = int(os.environ.get("DB_STATEMENT_TIMEOUT", "10000"))
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
 
 @app.after_request
@@ -64,11 +46,14 @@ def add_cors(response):
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return response
 
-
 def _make_pool():
-    dsn_with_timeout = f"{DSN} connect_timeout={DB_CONNECT_TIMEOUT} options='-c statement_timeout={DB_STATEMENT_TIMEOUT}'"
-    return pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=dsn_with_timeout)
-
+    return pool.ThreadedConnectionPool(
+        minconn=1,
+        maxconn=10,
+        dsn=DSN,
+        connect_timeout=DB_CONNECT_TIMEOUT,
+        options=f"-c statement_timeout={DB_STATEMENT_TIMEOUT}",
+    )
 
 try:
     _pool = _make_pool()
@@ -78,19 +63,16 @@ except Exception as exc:
 
 PAGE_SIZE = 25
 
-
 def _conn():
     if _pool is None:
         raise RuntimeError("Database connection pool is not available")
     return _pool.getconn()
 
-
 def _put(conn):
     try:
         _pool.putconn(conn)
     except Exception:
-        pass  # mock connections in tests are not pool-managed
-
+        pass
 
 def _serialise(obj):
     if isinstance(obj, decimal.Decimal):
@@ -99,15 +81,11 @@ def _serialise(obj):
         return obj.isoformat()
     raise TypeError(f"Not serialisable: {type(obj)}")
 
-
 def _json(data):
     return app.response_class(
         json.dumps(data, default=_serialise),
         mimetype="application/json",
     )
-
-
-# ── JSON endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
@@ -126,14 +104,8 @@ def health():
         if conn:
             _put(conn)
 
-
 @app.get("/metrics")
 def metrics():
-    """
-    Prometheus metrics endpoint.
-    
-    Exports collection metrics in Prometheus format for scraping.
-    """
     try:
         from infrastructure.metrics import get_metrics_text
         metrics_output = get_metrics_text()
@@ -144,7 +116,6 @@ def metrics():
     except Exception as exc:
         logger.error("Metrics export failed: %s", exc)
         return "# Metrics unavailable\n", 500
-
 
 @app.get("/banks")
 def banks():
@@ -159,7 +130,6 @@ def banks():
         if conn:
             _put(conn)
     return _json(rows)
-
 
 @app.get("/rates")
 def rates():
@@ -183,7 +153,6 @@ def rates():
             _put(conn)
     return _json(rows)
 
-
 @app.get("/rates/by-currency/<code>")
 def rates_by_currency(code: str):
     conn = None
@@ -199,7 +168,6 @@ def rates_by_currency(code: str):
     if not rows:
         abort(404)
     return _json(rows)
-
 
 @app.get("/rates/<int:source_id>")
 def rates_for_source(source_id: int):
@@ -217,9 +185,6 @@ def rates_for_source(source_id: int):
         abort(404)
     return _json(rows)
 
-
-# ── Review UI ─────────────────────────────────────────────────────────────────
-
 @app.get("/review")
 def review():
     conn = None
@@ -233,11 +198,10 @@ def review():
             _put(conn)
     return render_template("review.html", pending=pending, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
 
-
 @app.post("/review/decide")
 def review_decide():
     obs_ids = request.form.getlist("obs_id", type=int)
-    decision = request.form.get("decision")  # approve | dismiss
+    decision = request.form.get("decision")
     if not obs_ids or decision not in ("approve", "dismiss"):
         return jsonify({"error": "bad request"}), 400
 
@@ -248,19 +212,53 @@ def review_decide():
             if decision == "approve":
                 for oid in obs_ids:
                     cur.execute("""
-                        UPDATE rate_observation old
-                        SET is_current = FALSE
-                        FROM rate_observation new
-                        WHERE old.logical_observation_key = new.logical_observation_key
-                          AND new.id = %s
-                          AND old.id != new.id
-                          AND old.is_current = TRUE
+                        SELECT source_id, source_currency_code, category_id, effective_date
+                        FROM rate_observation WHERE id = %s
                     """, (oid,))
+                    cand_row = cur.fetchone()
+                    if not cand_row:
+                        continue
+                    sid, cur_code, cat_id, cand_eff_date = cand_row
+
                     cur.execute("""
-                        UPDATE rate_observation
-                        SET is_current = TRUE, change_review_status = 'new_publication'
-                        WHERE id = %s
-                    """, (oid,))
+                        SELECT id, effective_date
+                        FROM rate_observation
+                        WHERE source_id = %s
+                          AND source_currency_code = %s
+                          AND category_id IS NOT DISTINCT FROM %s
+                          AND is_current = TRUE
+                        LIMIT 1
+                    """, (sid, cur_code, cat_id))
+                    active_row = cur.fetchone()
+
+                    promote = True
+                    if active_row:
+                        active_id, active_eff_date = active_row
+                        if active_eff_date is not None and cand_eff_date is not None and cand_eff_date < active_eff_date:
+                            promote = False
+                        elif active_eff_date is not None and cand_eff_date is None:
+                            promote = False
+
+                    if promote:
+                        cur.execute("""
+                            UPDATE rate_observation
+                            SET is_current = FALSE
+                            WHERE source_id = %s
+                              AND source_currency_code = %s
+                              AND category_id IS NOT DISTINCT FROM %s
+                              AND is_current = TRUE
+                        """, (sid, cur_code, cat_id))
+                        cur.execute("""
+                            UPDATE rate_observation
+                            SET is_current = TRUE, change_review_status = 'new_publication'
+                            WHERE id = %s
+                        """, (oid,))
+                    else:
+                        cur.execute("""
+                            UPDATE rate_observation
+                            SET is_current = FALSE, change_review_status = 'new_publication'
+                            WHERE id = %s
+                        """, (oid,))
             else:
                 cur.execute("""
                     UPDATE rate_observation
@@ -278,13 +276,8 @@ def review_decide():
             _put(conn)
     return __import__('flask').redirect("/review")
 
-
-# ── USD Matrix ───────────────────────────────────────────────────────────────
-
 @app.get("/usd")
 def usd_matrix():
-    # Only Transfer (transactional) and Cash are user-actionable.
-    # weighted_average is a bank-internal benchmark — excluded from this view.
     category = request.args.get("category", "transactional")
     if category not in ("transactional", "cash"):
         category = "transactional"
@@ -320,9 +313,8 @@ def usd_matrix():
         if conn:
             _put(conn)
 
-    # Build matrix: {date: {bank_code: {buying, selling, bank_name}}}
     matrix = {}
-    banks_set = {}  # code -> name
+    banks_set = {}
     for bank_name, bank_code, eff_date, buying, selling in rows:
         if eff_date is None:
             continue
@@ -333,10 +325,8 @@ def usd_matrix():
         }
 
     dates = sorted(matrix.keys(), reverse=True)
-    # Sort banks by code alphabetically
     banks = sorted(banks_set.keys())
 
-    # Best buying rate per date (for highlighting)
     best_buying_per_date = {}
     for d in dates:
         vals = [matrix[d][b]["buying"] for b in matrix[d] if matrix[d][b]["buying"] is not None]
@@ -354,25 +344,20 @@ def usd_matrix():
         now=datetime.datetime.now(datetime.timezone.utc),
     )
 
-
-# ── UI ─────────────────────────────────────────────────────────────────────────
-
 @app.get("/")
 def ui():
     view      = request.args.get("view", "compare")
     currency  = request.args.get("currency", "USD").upper()
     source_id = request.args.get("source_id", type=int)
-    filt      = request.args.get("filter", "major")   # major | all
+    filt      = request.args.get("filter", "major")
     q         = request.args.get("q", "").strip().upper()
     show_all  = request.args.get("show_all", "0") == "1"
     date_str  = request.args.get("date", "").strip()
-    # weighted_average is a bank-internal benchmark, not user-actionable
     rate_type = request.args.get("rate_type", "transactional")
     if rate_type not in ("transactional", "cash"):
         rate_type = "transactional"
     error     = None
 
-    # parse date param
     sel_date = None
     if date_str:
         try:
@@ -422,7 +407,7 @@ def ui():
                     curs = {c: v for c, v in curs.items() if q in c}
                 bank_data["currencies"] = curs
 
-        else:  # all
+        else:
             rows      = []
             bank_data = None
             hist_rows = []
@@ -439,16 +424,13 @@ def ui():
         if conn:
             _put(conn)
 
-    # bar chart scale for compare view
     max_buying = None
     if view == "compare" and rows:
         max_buying = max((r["buying_rate"] for r in rows if r["buying_rate"]), default=None)
 
-    # soft pagination for by-bank view
     total_currencies = len(bank_data.get("currencies", {})) if bank_data else 0
     paginated = not show_all and total_currencies > PAGE_SIZE
 
-    # group hist_rows by date for template
     hist_by_date = {}
     for r in hist_rows:
         d = r["effective_date"]
@@ -484,7 +466,6 @@ def ui():
         now=datetime.datetime.now(datetime.timezone.utc),
         major_currencies=MAJOR_CURRENCIES,
     )
-
 
 if __name__ == "__main__":
     import sys

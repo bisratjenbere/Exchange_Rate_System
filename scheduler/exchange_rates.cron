@@ -1,24 +1,8 @@
-# Ethiopian Bank Exchange Rate Collector — cron schedule
-#
-# Install:
-#   crontab -e
-#   paste the line below (adjust PROJECT_DIR and python path)
-#
-# Runs 3 times daily to catch banks that publish at different times:
-#   08:00 EAT (05:00 UTC) — CBE, DBE, Ahadu (publish at open)
-#   12:00 EAT (09:00 UTC) — Enat, Rammis, Sidama, Wegagen (publish mid-morning)
-#   15:00 EAT (12:00 UTC) — BOA, NIB, Omo, Dashen (publish afternoon)
-#
-# Stdout+stderr appended to logs/cron.log.
-# Exit code 1 (all sources failed) is visible in cron mail if MAILTO is set.
-#
-# Environment variables:
-#   DATABASE_URL  — override default DSN (dbname=exchange_rates)
-#   MAILTO        — set to your email to receive failure notifications
-
 MAILTO=""
 PROJECT_DIR=/home/bisru/Exchange_Rate_System
 
-0 5  * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
-0 9  * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
-0 12 * * * cd $PROJECT_DIR && python3 -m scheduler.run_job >> logs/cron.log 2>&1
+30 8  * * 1-6 cd $PROJECT_DIR && ./venv/bin/python3 -m scheduler.run_job >> logs/cron.log 2>&1
+0  10 * * 1-6 cd $PROJECT_DIR && ./venv/bin/python3 -m scheduler.run_job >> logs/cron.log 2>&1
+30 11 * * 1-6 cd $PROJECT_DIR && ./venv/bin/python3 -m scheduler.run_job >> logs/cron.log 2>&1
+30 14 * * 1-6 cd $PROJECT_DIR && ./venv/bin/python3 -m scheduler.run_job >> logs/cron.log 2>&1
+0  16 * * 1-6 cd $PROJECT_DIR && ./venv/bin/python3 -m scheduler.run_job >> logs/cron.log 2>&1

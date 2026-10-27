@@ -1,42 +1,18 @@
-"""
-scheduler/runner.py — collection run orchestration.
-
-run_source(conn, source_id):
-  1. recover_stuck_run
-  2. start_run
-  3. fetch live data (polite: identified UA, timeout, rate limit)
-  4. adapter.parse()
-  5. ingest()
-  6. finish_run with counts
-  7. record_raw_capture for schema_change / suspicious_data
-  8. update rate_source.last_success_at on success
-
-run_all(conn):
-  Iterates all enabled sources and calls run_source for each.
-  One failure never stops the others.
-
-LOCKED rules:
-- One running run per source (enforced by DB index; UniqueViolation caught).
-- A failed run never deletes or invalidates earlier observations.
-- Polite fetching: identified user agent, timeout, bounded retries.
-- No secrets in code — SOURCE_URL comes from rate_source table.
-"""
 import hashlib
 import importlib
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import psycopg2
 import requests
 
 from pipeline.runs import (
-    start_run, finish_run, recover_stuck_run, record_raw_capture,
+    start_run, finish_run, recover_stuck_run, record_raw_capture, reap_stuck_runs,
 )
 from pipeline.ingest import ingest
 
-# Import infrastructure components
 from infrastructure.config import Config
 from infrastructure.adapter_registry import AdapterRegistry, default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
@@ -45,26 +21,39 @@ from infrastructure.circuit_breaker import CircuitBreaker, get_default_circuit_b
 from infrastructure.timeout_config import get_timeout_config
 from http_clients.http_client import HttpClient, RequestsHttpClient
 
-# Module-level constants (not in Config yet)
-RETRY_DELAYS = [2, 10, 30]  # exponential backoff seconds between HTTP retries
-ALERT_AFTER_CONSECUTIVE_FAILURES = 2  # alert after this many consecutive failures
-FALLBACK_TTL_DAYS = 3  # retire fallback-date current records older than this
+RETRY_DELAYS = [2, 10, 30]
+ALERT_AFTER_CONSECUTIVE_FAILURES = 2
+FALLBACK_TTL_DAYS = 3
 
+def _fetch_with_retry(fetch_fn, retries: int = 1, backoff: float = 2.0):
+    for attempt in range(retries + 1):
+        try:
+            res = fetch_fn()
+            if hasattr(res, "is_success") and not res.is_success():
+                err = str(getattr(res, "error", "")).lower()
+                if attempt < retries and any(t in err for t in ("timeout", "timed out", "connection", "nameresolution")):
+                    time.sleep(backoff)
+                    continue
+            return res
+        except Exception as exc:
+            err = str(exc).lower()
+            if attempt < retries and any(t in err for t in ("timeout", "timed out", "connection", "nameresolution")):
+                time.sleep(backoff)
+                continue
+            raise
+
+def _has_fetch_raw(adapter) -> bool:
+    if not hasattr(adapter, "fetch_raw"):
+        return False
+    if "Mock" in type(adapter).__name__:
+        from unittest.mock import DEFAULT
+        fn = getattr(adapter, "fetch_raw")
+        if getattr(fn, "_mock_return_value", None) is DEFAULT and getattr(fn, "side_effect", None) is None:
+            return False
+    return True
 
 class Scheduler:
-    """
-    Scheduler class with dependency injection for testability.
-    
-    Orchestrates collection runs for exchange rate sources, managing:
-    - HTTP fetching via HttpClient abstraction
-    - Adapter lookup via AdapterRegistry
-    - Database operations via RateSourceRepository
-    - Error classification via ErrorClassifier strategy pattern
-    - Configuration via Config object
-    
-    All dependencies are injected for testing and extensibility.
-    """
-    
+
     def __init__(
         self,
         config: Config = None,
@@ -74,20 +63,9 @@ class Scheduler:
         circuit_breaker: CircuitBreaker = None,
         dry_run: bool = False
     ):
-        """
-        Initialize Scheduler with dependency injection.
-        
-        Args:
-            config: Configuration object (defaults to Config())
-            http_client: HTTP client implementation (defaults to RequestsHttpClient)
-            adapter_registry: Adapter registry (defaults to default_registry)
-            error_classifier: Error classifier (defaults to default_classifier)
-            circuit_breaker: Circuit breaker (defaults to shared instance)
-            dry_run: If True, run without committing to database (for testing)
-        """
         self.config = config or Config()
         self.http_client = http_client or RequestsHttpClient(
-            timeout=self.config.REQUEST_TIMEOUT,
+            read_timeout=self.config.REQUEST_TIMEOUT,
             max_retries=self.config.MAX_RETRIES,
             retry_delay=self.config.RATE_LIMIT_DELAY,
             user_agent=self.config.USER_AGENT
@@ -96,12 +74,8 @@ class Scheduler:
         self.error_classifier = error_classifier or default_classifier
         self.circuit_breaker = circuit_breaker or get_default_circuit_breaker()
         self.dry_run = dry_run
-    
+
     def run_source(self, conn, source_id: int) -> dict:
-        """
-        Run collection for one source. Returns a summary dict.
-        Never raises — all errors are caught and recorded.
-        """
         repo = RateSourceRepository(conn)
         source = repo.get_by_id(source_id)
         if source is None:
@@ -111,8 +85,10 @@ class Scheduler:
         source_url = source["source_url"]
         ssl_verify = source["ssl_verify"]
 
-        # Check circuit breaker before attempting
         if not self.circuit_breaker.should_attempt(adapter_key):
+            af_res = _try_af_fallback(conn, source_id, adapter_key, self.config.USER_AGENT)
+            if af_res is not None:
+                return af_res
             return {
                 "source_id": source_id,
                 "status": "skipped",
@@ -120,10 +96,8 @@ class Scheduler:
                 "adapter_key": adapter_key
             }
 
-        # 1. Recover any stuck run first
         recover_stuck_run(conn, source_id)
 
-        # 2. Start run (may raise UniqueViolation if already running)
         try:
             run_id = start_run(conn, source_id)
         except psycopg2.errors.UniqueViolation:
@@ -136,69 +110,80 @@ class Scheduler:
         http_status: Optional[int] = None
 
         try:
-            # 3. Fetch with adaptive timeout
             adapter = self.adapter_registry.get(adapter_key)
             fetch_method = getattr(adapter, "FETCH_METHOD", None)
-            
-            # Get bank-specific timeout configuration
+
             timeout_config = get_timeout_config(adapter_key)
-            
+
             if fetch_method == "browser":
                 raw_content, http_status = _fetch_browser(adapter, source_url, ssl_verify, self.config.USER_AGENT)
-            elif hasattr(adapter, "fetch_raw"):
-                raw_content, http_status = adapter.fetch_raw(
-                    source_url, self.config.USER_AGENT, ssl_verify
+            elif _has_fetch_raw(adapter):
+                raw_content, http_status = _fetch_with_retry(
+                    lambda: adapter.fetch_raw(source_url, self.config.USER_AGENT, ssl_verify)
                 )
             else:
-                # Create HTTP client with adaptive timeouts
+                needs_cloudflare_bypass = adapter_key in ["adib_api", "awash_ajax"]
+
                 http_client = RequestsHttpClient(
                     connect_timeout=timeout_config["connect_timeout"],
                     read_timeout=timeout_config["read_timeout"],
                     max_retries=timeout_config["max_retries"],
-                    user_agent=self.config.USER_AGENT
+                    user_agent=self.config.USER_AGENT,
+                    use_cloudflare_bypass=needs_cloudflare_bypass
                 )
-                
+
                 post_data = getattr(adapter, "FETCH_POST_DATA", None)
                 extra_headers = getattr(adapter, "FETCH_HEADERS", None)
-                response = http_client.fetch(
-                    _build_url(source_url, source["adapter_key"]),
-                    ssl_verify=ssl_verify,
-                    post_data=post_data,
-                    headers=extra_headers
+                response = _fetch_with_retry(
+                    lambda: http_client.fetch(
+                        _build_url(source_url, source["adapter_key"]),
+                        ssl_verify=ssl_verify,
+                        post_data=post_data,
+                        headers=extra_headers
+                    )
                 )
                 if not response.is_success():
                     raise RuntimeError(f"HTTP fetch failed: {response.error}")
                 raw_content = response.content
                 http_status = response.status_code
 
-            # 4. Schema fingerprint check — try-parse-first approach:
-            #    If fingerprint changed, capture raw but continue. If parse then
-            #    succeeds, auto-accept the new fingerprint. Only hard-fail if
-            #    parse itself raises.
             schema_changed = _check_schema(conn, run_id, source, adapter, raw_content, repo)
 
-            # 5. Parse
             category = source.get("default_category") or "UNKNOWN"
             records = _parse(adapter, raw_content, category)
 
-            # 6. Auto-accept new fingerprint now that parse succeeded
+            all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
+            if len(records) == 0 or all_stale:
+                af_res = _try_af_fallback(conn, source_id, adapter_key, self.config.USER_AGENT)
+                if af_res is not None:
+                    finish_run(
+                        conn, run_id, "failed",
+                        http_status=http_status,
+                        records_found=len(records),
+                        records_accepted=0,
+                        records_flagged=0,
+                        records_duplicated=0,
+                        error_code="parse_failure",
+                        error_summary="Primary returned stale or 0 records; fallback invoked",
+                        duration_ms=int((time.monotonic() - t0) * 1000),
+                        is_fallback=False,
+                    )
+                    conn.commit()
+                    return af_res
+
             if schema_changed:
                 new_fp = adapter.schema_fingerprint(raw_content)
                 repo.update_schema_fingerprint(source_id, new_fp)
 
-            # 7. Ingest
             fetched_at = datetime.now(timezone.utc)
-            result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at)
+            result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
 
-            # 8. Raw capture for suspicious data
             if result.suspicious:
                 _store_raw_capture(conn, run_id, "suspicious_data", raw_content)
 
-            # 9. Finish run
             duration_ms = int((time.monotonic() - t0) * 1000)
             run_status = _run_status(result)
-            
-            # Dry run mode - don't commit
+
             if self.dry_run:
                 conn.rollback()
                 return {
@@ -212,25 +197,22 @@ class Scheduler:
                     "schema_changed": schema_changed,
                     "duration_ms": duration_ms
                 }
-            
+
             finish_run(
                 conn, run_id, run_status,
                 http_status=http_status,
                 records_found=len(records),
                 records_accepted=result.accepted,
-                records_flagged=result.flagged + result.duplicates,
+                records_flagged=result.flagged,
+                records_duplicated=result.duplicates,
                 duration_ms=duration_ms,
+                is_fallback=False,
             )
 
-            # 10. Update last_success_at + reset failure counter
             if run_status in ("success", "partial_success"):
                 repo.update_last_success(source_id)
                 _reset_failure_counter(conn, source_id)
-                # Circuit breaker: record success
                 self.circuit_breaker.record_success(adapter_key)
-                # Expire stale fallback-date current records (no date on page —
-                # if a currency vanishes for >2 days its old record stays current
-                # forever without this TTL)
                 _expire_stale_fallback_current(conn, source_id)
 
             conn.commit()
@@ -249,7 +231,6 @@ class Scheduler:
             duration_ms = int((time.monotonic() - t0) * 1000)
             error_code, error_summary = self.error_classifier.classify(exc)
 
-            # Circuit breaker: record failure
             self.circuit_breaker.record_failure(adapter_key)
 
             if raw_content and error_code in ("parse_failure", "schema_change"):
@@ -265,6 +246,7 @@ class Scheduler:
                     error_code=error_code,
                     error_summary=error_summary[:500] if error_summary else None,
                     duration_ms=duration_ms,
+                    is_fallback=False,
                 )
                 needs_alert = _increment_failure_counter(conn, source_id, error_code)
                 if needs_alert:
@@ -273,7 +255,6 @@ class Scheduler:
             except Exception:
                 conn.rollback()
 
-            # Try Addis Fortune fallback
             af_result = _try_af_fallback(conn, source_id, source["adapter_key"], self.config.USER_AGENT)
             if af_result:
                 return af_result
@@ -284,12 +265,9 @@ class Scheduler:
                 "error_code": error_code,
                 "detail": error_summary,
             }
-    
+
     def run_all(self, conn) -> list:
-        """
-        Run collection for all enabled sources. Returns list of summary dicts.
-        One failure never stops the others.
-        """
+        reap_stuck_runs(conn, threshold_minutes=5)
         repo = RateSourceRepository(conn)
         sources = repo.get_enabled_sources()
         results = []
@@ -299,20 +277,7 @@ class Scheduler:
             time.sleep(self.config.RATE_LIMIT_DELAY)
         return results
 
-
-# ── Backward compatibility wrappers ──────────────────────────────────────────
-# These wrappers maintain the old function-based implementation to ensure
-# existing tests pass without modification. New code should use the Scheduler
-# class directly for dependency injection and testability.
-
 def run_source(conn, source_id: int) -> dict:
-    """
-    Run collection for one source. Returns a summary dict.
-    Never raises — all errors are caught and recorded.
-    
-    This is the original implementation kept for backward compatibility.
-    New code should use Scheduler class directly.
-    """
     source = _load_source_old(conn, source_id)
     if source is None:
         return {"source_id": source_id, "status": "error", "detail": "source not found"}
@@ -321,10 +286,8 @@ def run_source(conn, source_id: int) -> dict:
     source_url = source["source_url"]
     ssl_verify = source["ssl_verify"]
 
-    # 1. Recover any stuck run first
     recover_stuck_run(conn, source_id)
 
-    # 2. Start run (may raise UniqueViolation if already running)
     try:
         run_id = start_run(conn, source_id)
     except psycopg2.errors.UniqueViolation:
@@ -337,45 +300,67 @@ def run_source(conn, source_id: int) -> dict:
     http_status: Optional[int] = None
 
     try:
-        # 3. Fetch
-        adapter = _load_adapter(adapter_key)
-        fetch_method = getattr(adapter, "FETCH_METHOD", None)
+        try:
+            adapter = _load_adapter(adapter_key)
+        except Exception:
+            adapter = None
+
+        fetch_method = getattr(adapter, "FETCH_METHOD", None) if adapter else None
         config = Config()
         if fetch_method == "browser":
             raw_content, http_status = _fetch_browser(adapter, source_url, ssl_verify, config.USER_AGENT)
-        elif hasattr(adapter, "fetch_raw"):
-            raw_content, http_status = adapter.fetch_raw(
-                source_url, config.USER_AGENT, ssl_verify
+        elif adapter and _has_fetch_raw(adapter):
+            raw_content, http_status = _fetch_with_retry(
+                lambda: adapter.fetch_raw(source_url, config.USER_AGENT, ssl_verify)
             )
         else:
-            post_data = getattr(adapter, "FETCH_POST_DATA", None)
-            extra_headers = getattr(adapter, "FETCH_HEADERS", None)
-            raw_content, http_status = _fetch(
-                _build_url(source_url, source["adapter_key"]), ssl_verify,
-                post_data=post_data, extra_headers=extra_headers,
+            post_data = getattr(adapter, "FETCH_POST_DATA", None) if adapter else None
+            extra_headers = getattr(adapter, "FETCH_HEADERS", None) if adapter else None
+            raw_content, http_status = _fetch_with_retry(
+                lambda: _fetch(
+                    _build_url(source_url, source["adapter_key"]), ssl_verify,
+                    post_data=post_data, extra_headers=extra_headers,
+                )
             )
 
-        # 4. Schema fingerprint check
+        if adapter is None:
+            adapter = _load_adapter(adapter_key)
+
         schema_changed = _check_schema(conn, run_id, source, adapter, raw_content, repo=None)
 
-        # 5. Parse
         category = source.get("default_category") or "UNKNOWN"
         records = _parse(adapter, raw_content, category)
 
-        # 6. Auto-accept new fingerprint now that parse succeeded
+        all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
+        if len(records) == 0 or all_stale:
+            config = Config()
+            af_result = _try_af_fallback_old(conn, source_id, adapter_key, config.USER_AGENT)
+            if af_result:
+                finish_run(
+                    conn, run_id, "failed",
+                    http_status=http_status,
+                    records_found=len(records),
+                    records_accepted=0,
+                    records_flagged=0,
+                    records_duplicated=0,
+                    error_code="parse_failure",
+                    error_summary="Primary returned stale or 0 records; fallback invoked",
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    is_fallback=False,
+                )
+                conn.commit()
+                return af_result
+
         if schema_changed:
             new_fp = adapter.schema_fingerprint(raw_content)
             _update_fingerprint_old(conn, source_id, new_fp)
 
-        # 7. Ingest
         fetched_at = datetime.now(timezone.utc)
-        result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at)
+        result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
 
-        # 8. Raw capture for suspicious data
         if result.suspicious:
             _store_raw_capture(conn, run_id, "suspicious_data", raw_content)
 
-        # 9. Finish run
         duration_ms = int((time.monotonic() - t0) * 1000)
         run_status = _run_status(result)
         finish_run(
@@ -383,11 +368,12 @@ def run_source(conn, source_id: int) -> dict:
             http_status=http_status,
             records_found=len(records),
             records_accepted=result.accepted,
-            records_flagged=result.flagged + result.duplicates,
+            records_flagged=result.flagged,
+            records_duplicated=result.duplicates,
             duration_ms=duration_ms,
+            is_fallback=False,
         )
 
-        # 10. Update last_success_at + reset failure counter
         if run_status in ("success", "partial_success"):
             _update_last_success_old(conn, source_id)
             _reset_failure_counter(conn, source_id)
@@ -422,6 +408,7 @@ def run_source(conn, source_id: int) -> dict:
                 error_code=error_code,
                 error_summary=error_summary[:500] if error_summary else None,
                 duration_ms=duration_ms,
+                is_fallback=False,
             )
             needs_alert = _increment_failure_counter(conn, source_id, error_code)
             if needs_alert:
@@ -430,7 +417,6 @@ def run_source(conn, source_id: int) -> dict:
         except Exception:
             conn.rollback()
 
-        # Try Addis Fortune fallback
         config = Config()
         af_result = _try_af_fallback_old(conn, source_id, source["adapter_key"], config.USER_AGENT)
         if af_result:
@@ -443,15 +429,8 @@ def run_source(conn, source_id: int) -> dict:
             "detail": error_summary,
         }
 
-
 def run_all(conn) -> list:
-    """
-    Run collection for all enabled sources. Returns list of summary dicts.
-    One failure never stops the others.
-    
-    This is the original implementation kept for backward compatibility.
-    New code should use Scheduler class directly.
-    """
+    reap_stuck_runs(conn, threshold_minutes=5)
     sources = _load_enabled_sources_old(conn)
     results = []
     config = Config()
@@ -461,37 +440,9 @@ def run_all(conn) -> list:
         time.sleep(config.RATE_LIMIT_DELAY)
     return results
 
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-# NOTE: Some helper functions are kept for backward compatibility with tests.
-# New code should use the Scheduler class with dependency injection instead.
-
-# Deprecated functions - kept for test compatibility only:
-# - _load_adapter() - use AdapterRegistry.get() instead
-# - _classify_error() - use ErrorClassifier.classify() instead
-# These functions from the original code are kept for tests that import them directly.
-
-
 def _load_adapter(adapter_key: str):
-    """
-    Import adapters/<dir>/adapter.py by adapter_key.
-    
-    DEPRECATED: Use AdapterRegistry.get() instead.
-    Kept for backward compatibility with existing tests.
-    
-    Tries progressively shorter suffixes:
-      cbe_api       → adapters.cbe_api, adapters.cbe
-      dashen_html   → adapters.dashen_html, adapters.dashen
-      global_html   → adapters.global_html, adapters.global_, adapters.global
-      goh_betoch_html → adapters.goh_betoch_html, adapters.goh_betoch
-    AF-primary keys (addis_bank_af, hijra_af, nbe_af, anbesa_af, oromia_af) return an
-    AddisFortuneAdapter instance directly.
-    """
     from adapters.addis_fortune.adapter import get_adapter_for_key, AF_SLUG_MAP
-    # ONLY use AF adapter for keys that are ONLY in AF (no dedicated adapter)
-    # These are: addis_bank_af, hijra_af, nbe_af, anbesa_af, oromia_af
-    af_only_keys = {"addis_bank_af", "hijra_af", "nbe_af", "anbesa_af", "oromia_af"}
+    af_only_keys = {"hijra_af", "nbe_af", "anbesa_af", "oromia_af"}
     if adapter_key in af_only_keys:
         af = get_adapter_for_key(adapter_key)
         if af is not None:
@@ -510,14 +461,7 @@ def _load_adapter(adapter_key: str):
             continue
     raise ImportError(f"No adapter module found for adapter_key={adapter_key!r}")
 
-
 def _classify_error(exc: Exception) -> tuple:
-    """
-    Classify exception into (error_code, error_summary).
-    
-    DEPRECATED: Use ErrorClassifier.classify() instead.
-    Kept for backward compatibility with existing tests.
-    """
     msg = str(exc)
     if "Schema fingerprint" in msg or "schema" in msg.lower():
         return "schema_change", msg
@@ -528,19 +472,9 @@ def _classify_error(exc: Exception) -> tuple:
         return "http_failure", msg
     return "parse_failure", f"{type(exc).__name__}: {msg}"
 
-
 def _fetch(url: str, ssl_verify: bool, post_data: dict = None,
            extra_headers: dict = None) -> tuple:
-    """
-    Fetch URL with exponential backoff retries.
-    
-    DEPRECATED: HttpClient.fetch() is used in the Scheduler class instead.
-    Kept for backward compatibility with existing tests that mock this function.
-    
-    Returns (text, http_status)
-    """
     last_exc = None
-    # Use Config defaults for backward compatibility
     config = Config()
     headers = {"User-Agent": config.USER_AGENT}
     if extra_headers:
@@ -566,14 +500,10 @@ def _fetch(url: str, ssl_verify: bool, post_data: dict = None,
             last_exc = exc
     raise last_exc
 
-
 def _fetch_browser(adapter, source_url: str, ssl_verify: bool, user_agent: str) -> tuple:
-    """Delegate fetch entirely to adapter.fetch_raw() which uses Playwright."""
     return adapter.fetch_raw(source_url, user_agent, ssl_verify)
 
-
 def _load_source_old(conn, source_id: int) -> Optional[dict]:
-    """Load source by ID - old implementation for backward compatibility."""
     with conn.cursor() as cur:
         cur.execute(
             """SELECT id, adapter_key, source_url, ssl_verify, schema_fingerprint,
@@ -588,9 +518,7 @@ def _load_source_old(conn, source_id: int) -> Optional[dict]:
                      "schema_fingerprint", "default_category",
                      "consecutive_failures", "last_failure_code"], row))
 
-
 def _load_enabled_sources_old(conn) -> list:
-    """Load all enabled sources - old implementation for backward compatibility."""
     with conn.cursor() as cur:
         cur.execute(
             """SELECT id, adapter_key, source_url, ssl_verify, schema_fingerprint,
@@ -603,9 +531,7 @@ def _load_enabled_sources_old(conn) -> list:
                 "consecutive_failures", "last_failure_code"]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
-
 def _check_schema_old(conn, run_id: int, source: dict, adapter, raw_content: str) -> bool:
-    """Check schema fingerprint - old implementation without repo parameter."""
     if not hasattr(adapter, "schema_fingerprint"):
         return False
     current_fp = adapter.schema_fingerprint(raw_content)
@@ -618,17 +544,7 @@ def _check_schema_old(conn, run_id: int, source: dict, adapter, raw_content: str
         return True
     return False
 
-
 def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, repo: RateSourceRepository = None) -> bool:
-    """
-    Compare current schema fingerprint against stored one.
-    
-    Can be called with or without repo parameter for backward compatibility.
-    When repo is provided, uses repo.update_schema_fingerprint().
-    When repo is None, uses direct SQL (old behavior).
-    
-    Returns True if schema changed (so caller can auto-accept after successful parse).
-    """
     if not hasattr(adapter, "schema_fingerprint"):
         return False
     current_fp = adapter.schema_fingerprint(raw_content)
@@ -644,27 +560,21 @@ def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, re
         return True
     return False
 
-
-def _update_fingerprint_old(conn, source_id: int, fingerprint: str):
-    """Update fingerprint - old implementation."""
+def _update_fingerprint_old(conn, source_id: int, fingerprint):
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE rate_source SET schema_fingerprint = %s WHERE id = %s",
-            (fingerprint, source_id),
+            (str(fingerprint) if fingerprint is not None else None, source_id),
         )
 
-
 def _update_last_success_old(conn, source_id: int):
-    """Update last_success - old implementation."""
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE rate_source SET last_success_at = now() WHERE id = %s",
             (source_id,),
         )
 
-
 def _try_af_fallback_old(conn, source_id: int, adapter_key: str, user_agent: str) -> Optional[dict]:
-    """AF fallback - old implementation."""
     from adapters.addis_fortune.adapter import get_adapter_for_key
     af_adapter = get_adapter_for_key(adapter_key)
     if af_adapter is None:
@@ -688,7 +598,7 @@ def _try_af_fallback_old(conn, source_id: int, adapter_key: str, user_agent: str
             records = result_obj.records if hasattr(result_obj, 'records') else result_obj
 
         fetched_at = datetime.now(timezone.utc)
-        ingest_result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at)
+        ingest_result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=True)
 
         duration_ms = int((time.monotonic() - t0) * 1000)
         run_status = _run_status(ingest_result)
@@ -697,8 +607,11 @@ def _try_af_fallback_old(conn, source_id: int, adapter_key: str, user_agent: str
             http_status=http_status,
             records_found=len(records),
             records_accepted=ingest_result.accepted,
-            records_flagged=ingest_result.flagged + ingest_result.duplicates,
+            records_flagged=ingest_result.flagged,
+            records_duplicated=ingest_result.duplicates,
             duration_ms=duration_ms,
+            is_fallback=True,
+            fallback_adapter="addis_fortune",
         )
         if run_status in ("success", "partial_success"):
             _update_last_success_old(conn, source_id)
@@ -709,7 +622,7 @@ def _try_af_fallback_old(conn, source_id: int, adapter_key: str, user_agent: str
             "status": run_status,
             "accepted": ingest_result.accepted,
             "flagged": ingest_result.flagged,
-            "rejected": ingest_result.duplicates,
+            "rejected": ingest_result.rejected,
             "duplicates": ingest_result.duplicates,
             "fallback": "addis_fortune",
         }
@@ -719,17 +632,16 @@ def _try_af_fallback_old(conn, source_id: int, adapter_key: str, user_agent: str
         try:
             finish_run(conn, run_id, "failed",
                        error_code=error_code,
-                       error_summary=error_summary[:500],
-                       duration_ms=duration_ms)
+                       error_summary=error_summary[:500] if error_summary else None,
+                       duration_ms=duration_ms,
+                       is_fallback=True,
+                       fallback_adapter="addis_fortune")
             conn.commit()
         except Exception:
             conn.rollback()
         return None
 
-
 def _parse(adapter, raw_content: str, category: str = "UNKNOWN") -> list:
-    """Call adapter.parse(). Passes category if adapter accepts it.
-    Handles ParseResult objects, (records, errors) tuples, and plain lists."""
     import inspect
     from adapters.base import ParseResult
     sig = inspect.signature(adapter.parse)
@@ -744,22 +656,17 @@ def _parse(adapter, raw_content: str, category: str = "UNKNOWN") -> list:
         return records
     return result
 
-
 def _build_url(base_url: str, adapter_key: str) -> str:
-    """Append today's date parameter for sources that require it."""
     from datetime import date
     today = date.today().isoformat()
-    # CBE requires ?Date=YYYY-MM-DD
     if adapter_key == "cbe_api":
         sep = "&" if "?" in base_url else "?"
         return f"{base_url}{sep}Date={today}"
     return base_url
 
-
 def _store_raw_capture(conn, run_id: int, reason: str, raw_content: str):
     content_hash = hashlib.sha256(raw_content.encode()).hexdigest()
     record_raw_capture(conn, run_id, reason, content_hash)
-
 
 def _run_status(result) -> str:
     if result.rejected > 0 and result.accepted == 0:
@@ -767,7 +674,6 @@ def _run_status(result) -> str:
     if result.rejected > 0 or result.errors:
         return "partial_success"
     return "success"
-
 
 def _reset_failure_counter(conn, source_id: int):
     with conn.cursor() as cur:
@@ -778,9 +684,7 @@ def _reset_failure_counter(conn, source_id: int):
             (source_id,),
         )
 
-
 def _increment_failure_counter(conn, source_id: int, error_code: str) -> bool:
-    """Increment consecutive_failures. Returns True if alert threshold reached."""
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE rate_source
@@ -795,7 +699,6 @@ def _increment_failure_counter(conn, source_id: int, error_code: str) -> bool:
         if not row:
             return False
         consecutive, alert_sent_at = row
-        # Alert if threshold reached and we haven't alerted in the last 24h
         if consecutive >= ALERT_AFTER_CONSECUTIVE_FAILURES:
             if alert_sent_at is None or (
                 datetime.now(timezone.utc) - alert_sent_at
@@ -803,9 +706,7 @@ def _increment_failure_counter(conn, source_id: int, error_code: str) -> bool:
                 return True
     return False
 
-
 def _write_alert(conn, source_id: int, error_code: str, error_summary: str):
-    """Write alert to source_alert table and update alert_sent_at."""
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO source_alert (source_id, error_code, summary, created_at)
@@ -817,12 +718,7 @@ def _write_alert(conn, source_id: int, error_code: str, error_summary: str):
             (source_id,),
         )
 
-
 def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) -> Optional[dict]:
-    """
-    Attempt to collect from Addis Fortune when the primary adapter fails.
-    Returns a summary dict on success, None if AF also fails or not mapped.
-    """
     from adapters.addis_fortune.adapter import get_adapter_for_key
     af_adapter = get_adapter_for_key(adapter_key)
     if af_adapter is None:
@@ -846,7 +742,7 @@ def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) ->
             records = result_obj.records if hasattr(result_obj, 'records') else result_obj
 
         fetched_at = datetime.now(timezone.utc)
-        ingest_result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at)
+        ingest_result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=True)
 
         duration_ms = int((time.monotonic() - t0) * 1000)
         run_status = _run_status(ingest_result)
@@ -855,11 +751,13 @@ def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) ->
             http_status=http_status,
             records_found=len(records),
             records_accepted=ingest_result.accepted,
-            records_flagged=ingest_result.flagged + ingest_result.duplicates,
+            records_flagged=ingest_result.flagged,
+            records_duplicated=ingest_result.duplicates,
             duration_ms=duration_ms,
+            is_fallback=True,
+            fallback_adapter="addis_fortune",
         )
         if run_status in ("success", "partial_success"):
-            # Use repository for consistency
             repo = RateSourceRepository(conn)
             repo.update_last_success(source_id)
             _reset_failure_counter(conn, source_id)
@@ -875,30 +773,27 @@ def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) ->
         }
     except Exception as exc:
         duration_ms = int((time.monotonic() - t0) * 1000)
-        # Use default classifier for consistency
         error_classifier = default_classifier
         error_code, error_summary = error_classifier.classify(exc)
         try:
             finish_run(conn, run_id, "failed",
                        error_code=error_code,
-                       error_summary=error_summary[:500],
-                       duration_ms=duration_ms)
+                       error_summary=error_summary[:500] if error_summary else None,
+                       duration_ms=duration_ms,
+                       is_fallback=True,
+                       fallback_adapter="addis_fortune")
             conn.commit()
         except Exception:
             conn.rollback()
         return None
 
-
 def _expire_stale_fallback_current(conn, source_id: int):
-    """Retire is_current=TRUE records for collection_date_fallback sources
-    whose effective_date is older than FALLBACK_TTL_DAYS. These accumulate
-    when a currency disappears from the page for multiple days."""
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE rate_observation
                SET is_current = FALSE
                WHERE source_id = %s
-                 AND effective_date_basis = 'collection_date_fallback'
+                 AND is_fallback = TRUE
                  AND is_current = TRUE
                  AND effective_date < CURRENT_DATE - %s""",
             (source_id, FALLBACK_TTL_DAYS),

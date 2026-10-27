@@ -1,20 +1,3 @@
-"""
-adapters/addis_fortune/adapter.py — Addis Fortune exchange rate aggregator.
-
-Source: https://exchange.addisfortune.news/bank/<slug>
-Method: Parse Livewire wire:snapshot JSON embedded in HTML.
-
-Used two ways:
-  1. Primary source  — for banks with no own adapter (Addis Bank, Hijra, NBE)
-  2. Fallback source — called by runner when a bank's primary adapter fails
-
-Parse rules:
-  - Each row has cashBuying/cashSelling + transBuying/transSelling → 2 records/currency
-  - applicable_date per row — skip if > STALENESS_DAYS old
-  - cashBuying == 0 and cashSelling == 0 → skip cash record (bank doesn't publish cash)
-  - source_record_key: "<currency>:cash" / "<currency>:transactional"
-  - raw_excerpt includes fallback_source="addis_fortune" for traceability
-"""
 import json
 import time
 from datetime import date, datetime
@@ -34,10 +17,9 @@ ADAPTER_KEY = "addis_fortune"
 BASE_URL = "https://exchange.addisfortune.news/bank/{slug}"
 STALENESS_DAYS = 2
 
-# Maps our adapter_key → Addis Fortune bank slug
 AF_SLUG_MAP = {
     "abay_html":        "abay-bank-sc",
-    "adib_api":         "addis-bank-sc-1",       # Addis International Bank
+    "adib_api":         "addis-bank-sc-1",
     "ahadu_html":       "ahadu-bank-sc",
     "amhara_html":      "amhara-bank-sc",
     "anbesa_browser":   "anbesa-bank-1",
@@ -66,8 +48,6 @@ AF_SLUG_MAP = {
     "wegagen_api":      "wegagen-bank-sc",
     "zamzam_html":      "zamzam-bank-sc",
     "zemen_ajax":       "zemen-bank-sc",
-    # Primary-only (no own adapter):
-    "addis_bank_af":    "addis-bank-sc-1",
     "hijra_af":         "hijra-bank-sc",
     "nbe_af":           "national-bank-of-ethiopia",
 }
@@ -77,9 +57,7 @@ _MONTH_MAP = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
-
 def _parse_af_date(date_str: str) -> Optional[date]:
-    """Parse 'Oct 20, 2026' → date(2026, 10, 20)."""
     try:
         parts = date_str.replace(",", "").split()
         month = _MONTH_MAP.get(parts[0].lower()[:3])
@@ -89,25 +67,14 @@ def _parse_af_date(date_str: str) -> Optional[date]:
     except (IndexError, ValueError):
         return None
 
-
 def _safe_rate(val) -> Optional[Decimal]:
     try:
         return normalize_rate(val)
     except (ValueError, TypeError):
         return None
 
-
 class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
-    """
-    Addis Fortune adapter for a specific bank slug.
 
-    Usage:
-        adapter = AddisFortuneAdapter("awash-bank-sc")
-        raw = adapter.fetch_raw(adapter.get_source_url(), user_agent, ssl_verify=True)
-        result = adapter.parse(raw[0])
-    """
-
-    # Pattern D: Empty config - field names are self-describing (cashBuying/transBuying)
     FIELD_CONFIG = {}
 
     def __init__(self, slug: str):
@@ -122,7 +89,6 @@ class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
         return ADAPTER_KEY
 
     def fetch_raw(self, source_url: str, user_agent: str, ssl_verify: bool = True):
-        """Fetch the AF bank page. Returns (html_text, http_status)."""
         headers = {"User-Agent": user_agent}
         resp = requests.get(source_url, headers=headers, timeout=15, verify=ssl_verify)
         return resp.text, resp.status_code
@@ -141,7 +107,7 @@ class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
             result.add_error("exchanges data missing or unexpected structure")
             return result
 
-        rows = exchanges[0]  # list of [rate_dict, meta_dict]
+        rows = exchanges[0]
         today = date.today()
 
         for row_pair in rows:
@@ -153,13 +119,11 @@ class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
             if not currency:
                 continue
 
-            # Staleness check
             applicable_date = _parse_af_date(row.get("applicable_date", ""))
             if applicable_date is None or (today - applicable_date).days > STALENESS_DAYS:
                 result.add_warning(f"{currency}: stale date {row.get('applicable_date')}, skipped")
                 continue
 
-            # Use field detection to emit records based on field structure
             mapping_notes = [
                 f"af_slug={self._slug}",
                 f"applicable_date={row.get('applicable_date')}"
@@ -170,7 +134,7 @@ class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
                 currency=currency,
                 source_record_id=currency,
                 effective_date=applicable_date,
-                effective_date_basis="source_published",  # AF publishes dates
+                effective_date_basis="source_published",
                 currency_name=row.get("currency_name"),
                 mapping_notes=mapping_notes
             )
@@ -179,9 +143,7 @@ class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
 
         return result
 
-
 def get_adapter_for_key(adapter_key: str) -> Optional["AddisFortuneAdapter"]:
-    """Return an AddisFortuneAdapter for the given adapter_key, or None if not mapped."""
     slug = AF_SLUG_MAP.get(adapter_key)
     if not slug:
         return None

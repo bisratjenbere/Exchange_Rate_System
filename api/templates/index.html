@@ -310,18 +310,19 @@
 {% if not rows %}
   <p class="empty">No {{ rate_type }} rates for {{ currency }}. Try a different rate type.</p>
 {% else %}
-  {% set industry_avg_buy = rows[0].industry_avg_buying if rows else None %}
-  {% set industry_avg_sell = rows[0].industry_avg_selling if rows else None %}
+  {% set industry_avg_buy = rows[0].get('industry_avg_buying') if rows else None %}
+  {% set industry_avg_sell = rows[0].get('industry_avg_selling') if rows else None %}
   {% set max_buying = rows | map(attribute='buying_rate') | select | max %}
 
   <div class="card">
-    <!-- industry average bar -->
+    {% if industry_avg_buy or industry_avg_sell %}
     <div class="avg-bar">
       <span>Industry Average ({{ rows|length }} banks):</span>
       <div class="avg-item"><span class="avg-dot buy"></span> You receive: <strong>{{ '%.4f'|format(industry_avg_buy|float) }} ETB</strong></div>
       <div class="avg-item"><span class="avg-dot sell"></span> You pay: <strong>{{ '%.4f'|format(industry_avg_sell|float) }} ETB</strong></div>
       <span style="margin-left:auto;font-size:0.72rem;color:#bbb">per 1 {{ currency }}</span>
     </div>
+    {% endif %}
 
     <div class="rank-header">
       <span>#</span>
@@ -345,7 +346,7 @@
           <div class="rank-bank-name">
             {{ r.bank_name }}
             {% if r.staleness_warning %}<span class="badge badge-stale">STALE</span>{% endif %}
-            {% if r.is_provisional %}<span class="badge badge-prov">UNVERIFIED</span>{% endif %}
+            {% if r.is_provisional %}<span class="badge badge-prov">PROVISIONAL</span>{% endif %}
             {% if r.raw_excerpt is defined and r.raw_excerpt and r.raw_excerpt.get('fallback_source') == 'addis_fortune' %}
               <span class="badge badge-af">AF</span>
             {% endif %}
@@ -369,12 +370,12 @@
         </div>
 
         <div class="rank-spread">
-          {% if r.spread_pct is not none %}{{ r.spread_pct }}%{% else %}—{% endif %}
+          {% if r.get('spread_pct') is not none %}{{ r.spread_pct }}%{% else %}—{% endif %}
           <small>spread</small>
         </div>
 
         <div class="rank-delta">
-          {% if r.delta_buying is not none %}
+          {% if r.get('delta_buying') is not none %}
             {% if r.delta_buying > 0.001 %}
               <span class="delta-up">▲ {{ '%.4f'|format(r.delta_buying) }}</span>
             {% elif r.delta_buying < -0.001 %}
@@ -427,7 +428,7 @@
           {% if bank_data.latest_fetch %}
             <span>Fetched {{ bank_data.latest_fetch.strftime('%d %b %H:%M') }} UTC</span>
           {% endif %}
-          {% if bank_data.is_provisional %}<span class="badge badge-prov">UNVERIFIED</span>{% endif %}
+          {% if bank_data.is_provisional %}<span class="badge badge-prov">PROVISIONAL</span>{% endif %}
         </div>
       </div>
       <div style="display:flex;gap:0.5rem;align-items:center">
@@ -517,9 +518,14 @@
         <th>Currency</th>
         {% for bank in matrix.banks %}
           <th title="{{ bank }}">
-            <a href="/?view=bank&source_id={{ matrix.bank_ids[bank] }}&rate_type={{ rate_type }}">
-              {{ matrix.bank_codes.get(bank, bank.split()[0][:6]) }}
-            </a>
+            {% set bid = matrix.get('bank_ids', {}).get(bank) if matrix.get('bank_ids') else None %}
+            {% if bid %}
+              <a href="/?view=bank&source_id={{ bid }}&rate_type={{ rate_type }}">
+                {{ matrix.get('bank_codes', {}).get(bank, bank.split()[0][:6]) if matrix.get('bank_codes') else bank.split()[0][:6] }}
+              </a>
+            {% else %}
+              {{ matrix.get('bank_codes', {}).get(bank, bank.split()[0][:6]) if matrix.get('bank_codes') else bank.split()[0][:6] }}
+            {% endif %}
           </th>
         {% endfor %}
       </tr>

@@ -1,12 +1,6 @@
-"""
-M2 constraint tests — run against a real PostgreSQL database.
-Each test is named after the rule it enforces.
-All tests require the schema to be applied first (apply_migrations fixture).
-"""
 import pytest
 import psycopg2
 from tests.db_utils import get_conn, apply_migrations, reset_schema
-
 
 @pytest.fixture(scope="module")
 def db():
@@ -16,15 +10,10 @@ def db():
     yield conn
     conn.close()
 
-
 @pytest.fixture(autouse=True)
 def rollback(db):
-    """Roll back after every test for isolation."""
     yield
     db.rollback()
-
-
-# ── seed helpers ────────────────────────────────────────────────────────────
 
 def seed_bank(cur, code="TST", authority="official"):
     cur.execute(
@@ -33,7 +22,6 @@ def seed_bank(cur, code="TST", authority="official"):
     )
     return cur.fetchone()[0]
 
-
 def seed_source(cur, bank_id, adapter_key="tst_api"):
     cur.execute(
         """INSERT INTO rate_source (bank_id, source_url, collection_method, adapter_key)
@@ -41,7 +29,6 @@ def seed_source(cur, bank_id, adapter_key="tst_api"):
         (bank_id, "https://example.com/api", "api", adapter_key)
     )
     return cur.fetchone()[0]
-
 
 def seed_category(cur, code="cash"):
     cur.execute(
@@ -52,7 +39,6 @@ def seed_category(cur, code="cash"):
     )
     return cur.fetchone()[0]
 
-
 def seed_run(cur, source_id, status="success"):
     cur.execute(
         """INSERT INTO collection_run (source_id, started_at, finished_at, status)
@@ -60,7 +46,6 @@ def seed_run(cur, source_id, status="success"):
         (source_id, status)
     )
     return cur.fetchone()[0]
-
 
 def seed_obs(cur, source_id, run_id, category_id,
              buying=100.0, selling=102.0,
@@ -90,11 +75,7 @@ def seed_obs(cur, source_id, run_id, category_id,
     )
     return cur.fetchone()[0]
 
-
-# ── rate value checks ────────────────────────────────────────────────────────
-
 def test_buying_rate_must_be_positive(db):
-    """Acceptance test 15 partial: no silent coercion — negative buying rejected."""
     cur = db.cursor()
     bid = seed_bank(cur, "B01")
     sid = seed_source(cur, bid)
@@ -102,7 +83,6 @@ def test_buying_rate_must_be_positive(db):
     rid = seed_run(cur, sid)
     with pytest.raises(psycopg2.errors.CheckViolation):
         seed_obs(cur, sid, rid, cid, buying=-1.0)
-
 
 def test_selling_rate_must_be_positive(db):
     cur = db.cursor()
@@ -113,9 +93,7 @@ def test_selling_rate_must_be_positive(db):
     with pytest.raises(psycopg2.errors.CheckViolation):
         seed_obs(cur, sid, rid, cid, selling=-1.0)
 
-
 def test_zero_buying_rate_rejected(db):
-    """Zero is not a valid rate — must be NULL for missing side."""
     cur = db.cursor()
     bid = seed_bank(cur, "B03")
     sid = seed_source(cur, bid)
@@ -124,9 +102,7 @@ def test_zero_buying_rate_rejected(db):
     with pytest.raises(psycopg2.errors.CheckViolation):
         seed_obs(cur, sid, rid, cid, buying=0.0)
 
-
 def test_both_sides_null_rejected(db):
-    """Acceptance test 16: at least one side must be non-NULL."""
     cur = db.cursor()
     bid = seed_bank(cur, "B04")
     sid = seed_source(cur, bid)
@@ -145,9 +121,7 @@ def test_both_sides_null_rejected(db):
             (sid, rid, cid)
         )
 
-
 def test_null_buying_with_valid_selling_accepted(db):
-    """Acceptance test 16: missing side is NULL, not zero — NULL buying is valid."""
     cur = db.cursor()
     bid = seed_bank(cur, "B05")
     sid = seed_source(cur, bid)
@@ -166,11 +140,7 @@ def test_null_buying_with_valid_selling_accepted(db):
     )
     db.commit()
 
-
-# ── version integrity ────────────────────────────────────────────────────────
-
 def test_version_number_must_be_positive(db):
-    """Acceptance test 13: version_number > 0 for committed versions."""
     cur = db.cursor()
     bid = seed_bank(cur, "B06")
     sid = seed_source(cur, bid)
@@ -179,9 +149,7 @@ def test_version_number_must_be_positive(db):
     with pytest.raises(psycopg2.errors.CheckViolation):
         seed_obs(cur, sid, rid, cid, version=0)
 
-
 def test_version_number_null_allowed_for_candidates(db):
-    """Gap review §2: candidates have NULL version_number."""
     cur = db.cursor()
     bid = seed_bank(cur, "B07")
     sid = seed_source(cur, bid)
@@ -202,9 +170,7 @@ def test_version_number_null_allowed_for_candidates(db):
     )
     db.commit()
 
-
 def test_supersedes_id_cannot_self_reference(db):
-    """Acceptance test 13: no cycles — supersedes_id != id."""
     cur = db.cursor()
     bid = seed_bank(cur, "B08")
     sid = seed_source(cur, bid)
@@ -217,9 +183,7 @@ def test_supersedes_id_cannot_self_reference(db):
             "UPDATE rate_observation SET supersedes_id = id WHERE id = %s", (oid,)
         )
 
-
 def test_unique_version_per_logical_key(db):
-    """Acceptance test 13: unique (logical_observation_key, version_number)."""
     cur = db.cursor()
     bid = seed_bank(cur, "B09")
     sid = seed_source(cur, bid)
@@ -231,11 +195,7 @@ def test_unique_version_per_logical_key(db):
     with pytest.raises(psycopg2.errors.UniqueViolation):
         seed_obs(cur, sid, rid, cid, version=1, lkey=lkey)
 
-
-# ── one current version per logical observation ──────────────────────────────
-
 def test_at_most_one_current_version_per_logical_key(db):
-    """Acceptance test 14: at most one is_current=true per logical_observation_key."""
     cur = db.cursor()
     bid = seed_bank(cur, "B10")
     sid = seed_source(cur, bid)
@@ -247,9 +207,7 @@ def test_at_most_one_current_version_per_logical_key(db):
     with pytest.raises(psycopg2.errors.UniqueViolation):
         seed_obs(cur, sid, rid, cid, version=2, is_current=True, lkey=lkey)
 
-
 def test_multiple_non_current_versions_allowed(db):
-    """Multiple non-current versions for same logical key are allowed."""
     cur = db.cursor()
     bid = seed_bank(cur, "B11")
     sid = seed_source(cur, bid)
@@ -260,11 +218,7 @@ def test_multiple_non_current_versions_allowed(db):
     seed_obs(cur, sid, rid, cid, version=2, is_current=False, lkey=lkey)
     db.commit()
 
-
-# ── run overlap guard ────────────────────────────────────────────────────────
-
 def test_one_running_run_per_source(db):
-    """Gap review §7: cannot have two running runs for the same source."""
     cur = db.cursor()
     bid = seed_bank(cur, "B12")
     sid = seed_source(cur, bid)
@@ -273,9 +227,7 @@ def test_one_running_run_per_source(db):
     with pytest.raises(psycopg2.errors.UniqueViolation):
         seed_run(cur, sid, status="running")
 
-
 def test_second_run_allowed_after_first_completes(db):
-    """A new run is allowed once the previous run is no longer running."""
     cur = db.cursor()
     bid = seed_bank(cur, "B13")
     sid = seed_source(cur, bid)
@@ -286,9 +238,6 @@ def test_second_run_allowed_after_first_completes(db):
     seed_run(cur, sid, status="running")
     db.commit()
 
-
-# ── status enum checks ───────────────────────────────────────────────────────
-
 def test_invalid_run_status_rejected(db):
     cur = db.cursor()
     bid = seed_bank(cur, "B14")
@@ -298,7 +247,6 @@ def test_invalid_run_status_rejected(db):
             """INSERT INTO collection_run (source_id, started_at, status)
                VALUES (%s, now(), 'invalid_status')""", (sid,)
         )
-
 
 def test_invalid_validation_status_rejected(db):
     cur = db.cursor()
@@ -320,7 +268,6 @@ def test_invalid_validation_status_rejected(db):
             (sid, rid, cid)
         )
 
-
 def test_invalid_identity_status_rejected(db):
     cur = db.cursor()
     bid = seed_bank(cur, "B16")
@@ -340,7 +287,6 @@ def test_invalid_identity_status_rejected(db):
                          'validated','not_required','not_a_status')""",
             (sid, rid, cid)
         )
-
 
 def test_invalid_effective_date_basis_rejected(db):
     cur = db.cursor()
@@ -362,9 +308,6 @@ def test_invalid_effective_date_basis_rejected(db):
             (sid, rid, cid)
         )
 
-
-# ── foreign key integrity ────────────────────────────────────────────────────
-
 def test_observation_requires_valid_source(db):
     cur = db.cursor()
     bid = seed_bank(cur, "B18")
@@ -374,7 +317,6 @@ def test_observation_requires_valid_source(db):
     with pytest.raises(psycopg2.errors.ForeignKeyViolation):
         seed_obs(cur, source_id=99999, run_id=rid, category_id=cid)
 
-
 def test_observation_requires_valid_run(db):
     cur = db.cursor()
     bid = seed_bank(cur, "B19")
@@ -383,7 +325,6 @@ def test_observation_requires_valid_run(db):
     with pytest.raises(psycopg2.errors.ForeignKeyViolation):
         seed_obs(cur, source_id=sid, run_id=99999, category_id=cid)
 
-
 def test_source_requires_valid_bank(db):
     cur = db.cursor()
     with pytest.raises(psycopg2.errors.ForeignKeyViolation):
@@ -391,9 +332,6 @@ def test_source_requires_valid_bank(db):
             """INSERT INTO rate_source (bank_id, source_url, collection_method, adapter_key)
                VALUES (99999, 'https://x.com', 'api', 'x_api')"""
         )
-
-
-# ── collection run counters ──────────────────────────────────────────────────
 
 def test_run_counters_default_to_zero(db):
     cur = db.cursor()
@@ -410,7 +348,6 @@ def test_run_counters_default_to_zero(db):
     assert accepted == 0
     assert flagged == 0
 
-
 def test_run_counters_cannot_be_negative(db):
     cur = db.cursor()
     bid = seed_bank(cur, "B21")
@@ -421,9 +358,6 @@ def test_run_counters_cannot_be_negative(db):
                VALUES (%s, now(), 'success', -1)""", (sid,)
         )
 
-
-# ── source authority ─────────────────────────────────────────────────────────
-
 def test_invalid_source_authority_rejected(db):
     cur = db.cursor()
     with pytest.raises(psycopg2.errors.CheckViolation):
@@ -432,11 +366,7 @@ def test_invalid_source_authority_rejected(db):
                VALUES ('BAD', 'Bad Bank', 'unknown_authority')"""
         )
 
-
-# ── reinterpretation link ────────────────────────────────────────────────────
-
 def test_reinterpretation_cannot_self_reference(db):
-    """ADR-005 / gap review §3: reinterpretation_of_id != id."""
     cur = db.cursor()
     bid = seed_bank(cur, "B22")
     sid = seed_source(cur, bid)

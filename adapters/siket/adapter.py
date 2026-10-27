@@ -1,8 +1,3 @@
-"""
-adapters/siket/adapter.py - Siket Bank (wide HTML table).
-
-MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
-"""
 import re
 from datetime import datetime, date
 from decimal import Decimal
@@ -18,36 +13,31 @@ SOURCE_URL = "https://siketbank.com/exchange-rate"
 
 _CODE_FIX = {"US": "USD"}
 
-
 class SiketAdapter(FieldStructureMixin, HTMLTableAdapter):
-    """Siket Bank adapter with field detection - wide table."""
-    
+
     FIELD_CONFIG = {}
-    
+
     def get_source_url(self) -> str:
         return SOURCE_URL
-    
+
     def get_adapter_key(self) -> str:
         return ADAPTER_KEY
-    
+
     def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
-        """Process wide table using field detection."""
         result = ParseResult()
-        
+
         effective_date = _parse_date(soup)
         date_basis = "source_published" if effective_date else "collection_date_fallback"
-        
+
         try:
             records = _parse_table(self, tables[0], effective_date, date_basis)
             result.records.extend(records)
         except Exception as exc:
             result.add_error(f"table_0:{exc}")
-        
+
         return result
 
-
 def _parse_table(adapter, table, effective_date, date_basis) -> list:
-    """Parse wide table using field detection."""
     rows = [r for r in table.find_all("tr") if r.find("td")]
     records = []
     for row in rows:
@@ -58,7 +48,7 @@ def _parse_table(adapter, table, effective_date, date_basis) -> list:
         code = _CODE_FIX.get(raw_code, raw_code)
         if not code:
             continue
-        
+
         row_dict = {
             "cash_buying": cells[1],
             "cash_selling": cells[2],
@@ -68,7 +58,7 @@ def _parse_table(adapter, table, effective_date, date_basis) -> list:
         if len(cells) > 6:
             row_dict["weighted_buying"] = cells[5]
             row_dict["weighted_selling"] = cells[6]
-        
+
         detected_records = adapter.detect_and_emit(
             data=row_dict,
             currency=code,
@@ -76,44 +66,33 @@ def _parse_table(adapter, table, effective_date, date_basis) -> list:
             effective_date_basis=date_basis,
             source_publication_id=str(effective_date) if effective_date else None
         )
-        
+
         records.extend(detected_records)
     return records
 
-
 def _parse_date(soup) -> Optional[date]:
-    """Extract date from page text in format like 'Jan 15, 2024'."""
     text = soup.get_text(" ")
     m = re.search(r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}', text)
     if m:
         raw = re.sub(r'\s+', ' ', m.group(0).strip())
         for fmt in ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y"):
-            try: 
+            try:
                 return datetime.strptime(raw, fmt).date()
-            except ValueError: 
+            except ValueError:
                 pass
     return None
 
-
 def _safe_rate(raw) -> Optional[Decimal]:
-    """Convert raw rate string to Decimal, returning None on failure."""
     try:
         return normalize_rate(raw)
     except ValueError:
         return None
 
-
-# ============================================================================
-# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
-# ============================================================================
-
 _adapter_instance = SiketAdapter()
 
 def parse(raw_html: str) -> tuple:
-    """Parse Siket Bank HTML into records. Module-level wrapper."""
     result = _adapter_instance.parse(raw_html)
     return result.records, result.errors
 
 def schema_fingerprint(raw_html: str) -> str:
-    """Generate schema fingerprint. Module-level wrapper."""
     return _adapter_instance.schema_fingerprint(raw_html)

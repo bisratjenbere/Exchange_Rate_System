@@ -1,16 +1,3 @@
-"""
-adapters/abay/adapter.py — Abay Bank (3-table HTML).
-
-Parse rules:
-- Table 0: WEIGHTED AVERAGE RATE — CURRENCY | BUYING | SELLING
-- Table 1: CASH RATE             — CURRENCY | BUYING | SELLING
-- Table 2: TRANSACTION RATE      — CURRENCY | BUYING | SELLING
-- Date in page text: "October 13, 2026" → source_published.
-- Empty selling cell → None.
-- Partial failure: returns (records, errors). Never raises.
-
-MIGRATION NOTE: Migrated to FieldStructureMixin for automatic category detection.
-"""
 import re
 from datetime import date
 from typing import Optional
@@ -32,61 +19,48 @@ _MONTH_MAP = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
-_TABLE_CATEGORIES = {0: "weighted_average", 1: "cash", 2: "transactional"}
-
-
 class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
-    """
-    Abay Bank adapter with field detection.
-    
-    Parses 3 HTML tables with different rate categories.
-    Field Structure: Table position determines category context.
-    """
-    
+
     FIELD_CONFIG = {}
-    
+    EXPECTED_CATEGORIES = ["weighted_average", "cash", "transactional"]
+
     def get_source_url(self) -> str:
-        """Return Abay Bank website URL."""
         return SOURCE_URL
-    
+
     def get_adapter_key(self) -> str:
-        """Return unique adapter identifier."""
         return ADAPTER_KEY
-    
+
     def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
-        """
-        Extract AdapterRecords from Abay Bank HTML tables using field detection.
-        
-        Args:
-            soup: BeautifulSoup parsed HTML
-            tables: List of table elements (expecting 3 tables)
-            **options: Not used for Abay
-            
-        Returns:
-            ParseResult with extracted records and any errors
-        """
         result = ParseResult()
-        
-        # Extract date from page text
+
+        if not tables:
+            for expected in self.EXPECTED_CATEGORIES:
+                result.add_error(f"table_{expected}:missing")
+            return result
+
         text = soup.get_text(" ", strip=True)
         effective_date = self._extract_date(text)
         date_basis = "source_published" if effective_date else "collection_date_fallback"
-        
-        # Process each table with its corresponding category
-        for idx, expected_category in _TABLE_CATEGORIES.items():
-            if idx >= len(tables):
-                result.add_error(f"table_{idx}_{expected_category}:missing")
+
+        found_categories = set()
+        for idx, table in enumerate(tables):
+            category = self.extract_table_category(table, soup)
+            if category == "UNKNOWN":
                 continue
+            found_categories.add(category)
             try:
-                records = self._parse_table(tables[idx], expected_category, effective_date, date_basis)
+                records = self._parse_table(table, category, effective_date, date_basis)
                 result.records.extend(records)
             except Exception as exc:
-                result.add_error(f"table_{idx}_{expected_category}:{exc}")
-        
+                result.add_error(f"table_{idx}_{category}:{exc}")
+
+        for expected in self.EXPECTED_CATEGORIES:
+            if expected not in found_categories:
+                result.add_error(f"table_{expected}:missing")
+
         return result
-    
+
     def _extract_date(self, text: str) -> Optional[date]:
-        """Return the most recent date found in text (avoids old news article dates)."""
         best = None
         for m in _DATE_RE.finditer(text):
             month = _MONTH_MAP.get(m.group(1).lower())
@@ -99,20 +73,8 @@ class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
             except ValueError:
                 continue
         return best
-    
+
     def _parse_table(self, table, expected_category: str, effective_date: Optional[date], date_basis: str) -> list:
-        """
-        Parse Abay exchange rate table using field detection.
-        
-        Args:
-            table: BeautifulSoup table element
-            expected_category: Expected category from table position
-            effective_date: Extracted effective date or None
-            date_basis: "source_published" or "collection_date_fallback"
-            
-        Returns:
-            List of AdapterRecords
-        """
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
         for row in rows:
@@ -122,61 +84,30 @@ class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
             currency_code = cells[0].strip()
             if not currency_code:
                 continue
-            
-            # Create dict with generic field names
+
             row_dict = {
                 "buying": cells[1],
                 "selling": cells[2],
             }
-            
-            # Use field detection
+
             detected_records = self.detect_and_emit(
                 data=row_dict,
                 currency=currency_code,
                 effective_date=effective_date,
                 effective_date_basis=date_basis
             )
-            
-            # Context-based category override: table position determines category
+
             for rec in detected_records:
                 if rec.category == 'UNKNOWN':
                     rec.category = normalize_category(expected_category)
-            
+
             records.extend(detected_records)
         return records
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Backward Compatibility Wrappers
-# ═══════════════════════════════════════════════════════════════════════════════
-
 def parse(raw_html: str) -> tuple:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use AbayAdapter().parse().
-    
-    Args:
-        raw_html: Raw HTML string from Abay Bank website
-        
-    Returns:
-        Tuple of (records, errors) for backward compatibility
-    """
     adapter = AbayAdapter()
     result = adapter.parse(raw_html)
     return result.records, result.errors
 
-
 def schema_fingerprint(raw_html: str) -> str:
-    """
-    Old function API (for backward compatibility).
-    
-    New code should use AbayAdapter().schema_fingerprint().
-    
-    Args:
-        raw_html: Raw HTML string from Abay Bank website
-        
-    Returns:
-        SHA256 hash of table structure
-    """
     return AbayAdapter().schema_fingerprint(raw_html)

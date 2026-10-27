@@ -1,23 +1,3 @@
-"""
-adapters/oromia/adapter.py — Oromia Bank (HTML ninja-table).
-
-Fetch: GET https://www.oromiabanksc.com/
-       Full browser headers required (88KB response).
-
-The homepage embeds a ninja-table (id="footable_12396") with historical
-exchange rate rows. Each row: Date | Currency | Buying Rate | Selling Rate.
-"No Trade" values are skipped. Only the most recent date's rows are emitted.
-
-Parse rules:
-- Filter rows to max(date) found in the table.
-- "No Trade" buying or selling → skip that row.
-- Category: transactional (only category published).
-- Date basis: source_published (date is in each row).
-- Partial failure: returns (records, errors). Never raises.
-
-MIGRATION NOTE: Migrated to use FieldStructureMixin for automatic category detection.
-Converts HTML table cells into dict structure with field names for field detection.
-"""
 import re
 from datetime import date, datetime
 from typing import Optional
@@ -38,45 +18,31 @@ FETCH_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-
 class OromiaAdapter(FieldStructureMixin, HTMLTableAdapter):
-    """
-    Oromia Bank adapter - ninja-table with historical data.
-    
-    Field Structure: HTML table converted to dict
-    - Buying Rate column → buying_rate field
-    - Selling Rate column → selling_rate field
-    - Field detection auto-discovers and assigns category (transactional)
-    """
-    
-    # Empty config - field detection will discover buying_rate/selling_rate
+
     FIELD_CONFIG = {}
-    
+
     def get_source_url(self) -> str:
         return SOURCE_URL
-    
+
     def get_adapter_key(self) -> str:
         return ADAPTER_KEY
-    
+
     def _process_tables(self, soup: BeautifulSoup, tables: list, **kwargs) -> ParseResult:
-        """Process ninja-table from Oromia Bank using field detection."""
         result = ParseResult()
-        
-        # Find specific ninja-table
+
         table = soup.find("table", {"id": "footable_12396"})
         if table is None:
-            # Try any table with exchange rate data
             table = soup.find("table", id=re.compile(r"footable_"))
         if table is None:
             result.add_error("table_not_found")
             return result
-        
+
         rows = table.find_all("tr")
         if len(rows) < 2:
             result.add_error("no_data_rows")
             return result
-        
-        # Parse all rows into structured data
+
         parsed = []
         for row in rows[1:]:
             cells = [td.get_text(strip=True) for td in row.find_all("td")]
@@ -91,8 +57,7 @@ class OromiaAdapter(FieldStructureMixin, HTMLTableAdapter):
                 selling_text = cells[3].strip()
                 if not currency or buying_text == "No Trade" or selling_text == "No Trade":
                     continue
-                
-                # Convert table cells to dict for field detection
+
                 row_dict = {
                     "buying_rate": buying_text,
                     "selling_rate": selling_text,
@@ -100,21 +65,23 @@ class OromiaAdapter(FieldStructureMixin, HTMLTableAdapter):
                     "currency": currency
                 }
                 parsed.append((row_date, currency, row_dict))
-                
+
             except Exception as exc:
                 result.add_error(f"row:{cells}:{exc}")
-        
+
         if not parsed:
             result.add_error("no_valid_rows")
             return result
-        
-        # Only emit the most recent date
+
+        table_cat = self.extract_table_category(table, soup)
+        if table_cat == "UNKNOWN":
+            table_cat = normalize_category(kwargs.get("category", "transactional"))
+
         max_date = max(r[0] for r in parsed)
         for row_date, currency, row_dict in parsed:
             if row_date != max_date:
                 continue
-            
-            # Use field detection to automatically discover and emit records
+
             detected_records = self.detect_and_emit(
                 data=row_dict,
                 currency=currency,
@@ -123,22 +90,18 @@ class OromiaAdapter(FieldStructureMixin, HTMLTableAdapter):
                 source_record_id=f"{max_date}:{currency}",
                 source_publication_id=str(max_date)
             )
-            
-            # Post-process: Oromia only publishes transactional rates
+
             for rec in detected_records:
                 if rec.category == 'UNKNOWN':
-                    rec.category = normalize_category("transactional")
-            
+                    rec.category = table_cat
+
             result.records.extend(detected_records)
-        
+
         return result
 
-
 def _parse_date(raw: str) -> Optional[date]:
-    """Parse date from formats like 'Oct 10, 2026' or '2026-10-10'."""
     if not raw:
         return None
-    # Formats seen: "Oct 10, 2026", "2026-10-10"
     for fmt in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(raw.strip(), fmt).date()
@@ -146,19 +109,11 @@ def _parse_date(raw: str) -> Optional[date]:
             continue
     return None
 
-
-# ============================================================================
-# MODULE-LEVEL WRAPPER FUNCTIONS FOR BACKWARD COMPATIBILITY
-# ============================================================================
-
 _adapter_instance = OromiaAdapter()
 
 def parse(raw_html: str) -> tuple:
-    """Parse Oromia Bank HTML into records. Module-level wrapper."""
     result = _adapter_instance.parse(raw_html)
     return result.records, result.errors
 
 def schema_fingerprint(raw_html: str) -> str:
-    """Generate schema fingerprint. Module-level wrapper."""
     return _adapter_instance.schema_fingerprint(raw_html)
-
