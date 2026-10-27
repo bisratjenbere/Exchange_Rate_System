@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
+import infrastructure.env
 
 from scheduler.runner import run_all
 from scheduler.health import quick_health_check
@@ -25,6 +26,8 @@ log = logging.getLogger("run_job")
 
 def main():
     dsn = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
+    if dsn.startswith("postgres://"):
+        dsn = dsn.replace("postgres://", "postgresql://", 1)
     started = datetime.now(timezone.utc).isoformat()
     log.info("collection started at=%s dsn=%s", started, dsn.split("@")[-1])
 
