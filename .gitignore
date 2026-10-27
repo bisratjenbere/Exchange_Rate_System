@@ -204,3 +204,5 @@ scripts/check_*.py
 # Performance test artifacts
 tests/performance/
 
+.neon
+node_modules/

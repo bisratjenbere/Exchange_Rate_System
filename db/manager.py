@@ -1,5 +1,6 @@
 import os
 import logging
+import infrastructure.env
 from contextlib import contextmanager
 from typing import Optional
 import psycopg2

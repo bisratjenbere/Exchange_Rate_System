@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+import infrastructure.env
 
 @dataclass(frozen=True)
 class Config:

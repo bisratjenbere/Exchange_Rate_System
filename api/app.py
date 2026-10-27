@@ -28,6 +28,8 @@ from trusted_view.query import (
     MAJOR_CURRENCIES,
 )
 
+import infrastructure.env
+
 app = Flask(__name__)
 
 DSN = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
@@ -47,13 +49,15 @@ def add_cors(response):
     return response
 
 def _make_pool():
-    return pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=10,
-        dsn=DSN,
-        connect_timeout=DB_CONNECT_TIMEOUT,
-        options=f"-c statement_timeout={DB_STATEMENT_TIMEOUT}",
-    )
+    kwargs = {
+        "minconn": 1,
+        "maxconn": 10,
+        "dsn": DSN,
+        "connect_timeout": DB_CONNECT_TIMEOUT,
+    }
+    if "-pooler" not in DSN:
+        kwargs["options"] = f"-c statement_timeout={DB_STATEMENT_TIMEOUT}"
+    return pool.ThreadedConnectionPool(**kwargs)
 
 try:
     _pool = _make_pool()
