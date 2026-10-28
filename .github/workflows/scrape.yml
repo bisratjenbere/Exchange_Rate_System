@@ -25,3 +25,18 @@ jobs:
           TZ: Africa/Addis_Ababa
         run: |
           python -m scheduler.run_job
+      - name: Create database backup
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          mkdir -p backups
+          pg_dump "$DATABASE_URL" | gzip > backups/exchange_rates_backup_latest.sql.gz
+      - name: Upload backup artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-database-backup
+          path: backups/exchange_rates_backup_latest.sql.gz
+          retention-days: 30
