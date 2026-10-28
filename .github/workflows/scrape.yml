@@ -2,11 +2,11 @@ name: Scheduled Exchange Rate Scraper
 
 on:
   schedule:
-    - cron: '30 5 * * *'
-    - cron: '0 7 * * *'
-    - cron: '30 8 * * *'
-    - cron: '30 11 * * *'
-    - cron: '0 13 * * *'
+    - cron: '35 5 * * *'
+    - cron: '5 7 * * *'
+    - cron: '35 8 * * *'
+    - cron: '35 11 * * *'
+    - cron: '5 13 * * *'
   workflow_dispatch:
 
 jobs:
