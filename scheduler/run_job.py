@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,11 +32,17 @@ def main():
     started = datetime.now(timezone.utc).isoformat()
     log.info("collection started at=%s dsn=%s", started, dsn.split("@")[-1])
 
-    try:
-        conn = psycopg2.connect(dsn)
-    except Exception as exc:
-        log.error("db connect failed: %s", exc)
-        sys.exit(1)
+    conn = None
+    for attempt in range(1, 4):
+        try:
+            conn = psycopg2.connect(dsn)
+            break
+        except Exception as exc:
+            if attempt == 3:
+                log.error("db connect failed after %d attempts: %s", attempt, exc)
+                sys.exit(1)
+            log.warning("db connect attempt %d failed (%s), retrying in %ds...", attempt, exc, attempt * 3)
+            time.sleep(attempt * 3)
 
     try:
         control = CollectionControl(conn)
