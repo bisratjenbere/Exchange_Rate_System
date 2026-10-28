@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
+import urllib3
 import infrastructure.env
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from scheduler.runner import run_all
 from scheduler.health import quick_health_check
