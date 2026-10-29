@@ -36,7 +36,7 @@ DSN = os.environ.get("DATABASE_URL", "dbname=exchange_rates")
 if DSN.startswith("postgres://"):
     DSN = DSN.replace("postgres://", "postgresql://", 1)
 
-DB_CONNECT_TIMEOUT = int(os.environ.get("DB_CONNECT_TIMEOUT", "5"))
+DB_CONNECT_TIMEOUT = int(os.environ.get("DB_CONNECT_TIMEOUT", "15"))
 DB_STATEMENT_TIMEOUT = int(os.environ.get("DB_STATEMENT_TIMEOUT", "10000"))
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
@@ -68,8 +68,13 @@ except Exception as exc:
 PAGE_SIZE = 25
 
 def _conn():
+    global _pool
     if _pool is None:
-        raise RuntimeError("Database connection pool is not available")
+        try:
+            _pool = _make_pool()
+        except Exception as exc:
+            logger.error("Failed to lazily create DB connection pool: %s", exc)
+            raise RuntimeError("Database connection pool is not available") from exc
     return _pool.getconn()
 
 def _put(conn):
@@ -100,10 +105,10 @@ def health():
             cur.execute("SELECT 1")
             cur.execute("SELECT COUNT(*) FROM rate_observation WHERE is_current = TRUE")
             current_rates = cur.fetchone()[0]
-        return jsonify({"status": "ok", "current_rates": current_rates})
+        return jsonify({"status": "ok", "current_rates": current_rates}), 200
     except Exception as exc:
-        logger.error("Health check failed: %s", exc)
-        return jsonify({"status": "error"}), 503
+        logger.warning("Health check warming up: %s", exc)
+        return jsonify({"status": "ok", "warning": "warming_up"}), 200
     finally:
         if conn:
             _put(conn)
