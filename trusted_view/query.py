@@ -147,9 +147,14 @@ class TrustedRatesQueryBuilder:
                 WHERE co.logical_observation_key = o.logical_observation_key
                   AND cc.status = 'open'
             )                               AS has_pending_review,
-            (o.fetched_at::date - o.effective_date) > 3
-                                            AS staleness_warning,
-            (CURRENT_DATE - o.effective_date)  AS days_stale"""
+            CASE WHEN o.effective_date IS NOT NULL
+                 THEN (o.fetched_at::date - o.effective_date) > 3
+                 ELSE FALSE
+            END                             AS staleness_warning,
+            CASE WHEN o.effective_date IS NOT NULL
+                 THEN (CURRENT_DATE - o.effective_date)
+                 ELSE NULL
+            END                             AS days_stale"""
 
     def _build_joins(self) -> str:
         return """FROM rate_observation o
@@ -223,8 +228,14 @@ def get_best_rates_by_currency(conn, currency_code: str, category: str = None) -
             o.buying_rate, o.selling_rate,
             o.effective_date, o.fetched_at,
             rs.verification_status AS source_verification_status,
-            (o.fetched_at::date - o.effective_date) > 3 AS staleness_warning,
-            (CURRENT_DATE - o.effective_date) AS days_stale
+            CASE WHEN o.effective_date IS NOT NULL
+                 THEN (o.fetched_at::date - o.effective_date) > 3
+                 ELSE FALSE
+            END AS staleness_warning,
+            CASE WHEN o.effective_date IS NOT NULL
+                 THEN (CURRENT_DATE - o.effective_date)
+                 ELSE NULL
+            END AS days_stale
         FROM rate_observation o
         JOIN rate_source rs ON rs.id = o.source_id
         JOIN bank b ON b.id = rs.bank_id
@@ -337,8 +348,8 @@ def get_bank_rates_pivoted(conn, source_id: int) -> dict:
     bank_name = rows[0]["bank_name"]
     latest_date = max((r["effective_date"] for r in rows if r["effective_date"]), default=None)
     latest_fetch = max((r["fetched_at"] for r in rows if r["fetched_at"]), default=None)
-    any_provisional = any(r["is_provisional"] for r in rows)
-    any_stale = any(r["staleness_warning"] for r in rows)
+    any_provisional = any(bool(r.get("is_provisional")) for r in rows)
+    any_stale = any(bool(r.get("staleness_warning")) for r in rows)
 
     return {
         "bank_name": bank_name,
@@ -348,7 +359,7 @@ def get_bank_rates_pivoted(conn, source_id: int) -> dict:
         "latest_fetch": latest_fetch,
         "is_provisional": any_provisional,
         "staleness_warning": any_stale,
-        "categories": sorted({r["category"] for r in rows if r["category"]}),
+        "categories": sorted({str(r["category"]) for r in rows if r.get("category")}),
     }
 
 def get_currency_matrix(conn, major_only: bool = False) -> dict:

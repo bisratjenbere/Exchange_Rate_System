@@ -25,3 +25,11 @@ tmp_upload_dir = None
 limit_request_line = 4094
 limit_request_fields = 100
 limit_request_field_size = 8190
+
+def post_fork(server, worker):
+    try:
+        from api.app import _reset_pool
+        _reset_pool()
+    except Exception:
+        pass
+

@@ -2,8 +2,11 @@ name: Scheduled Exchange Rate Scraper
 
 on:
   schedule:
-    - cron: '35 5,8,11 * * *'
-    - cron: '5 7,13 * * *'
+    - cron: '18 5 * * *'
+    - cron: '42 7 * * *'
+    - cron: '18 8 * * *'
+    - cron: '18 11 * * *'
+    - cron: '42 13 * * *'
   workflow_dispatch:
 
 jobs:
@@ -38,6 +41,11 @@ jobs:
           mkdir -p backups
           DUMP_URL="${DATABASE_URL/-pooler/}"
           pg_dump "$DUMP_URL" | gzip > backups/exchange_rates_backup_latest.sql.gz
+          FILE_SIZE=$(stat -c%s backups/exchange_rates_backup_latest.sql.gz 2>/dev/null || echo 0)
+          if [ "$FILE_SIZE" -lt 10000 ]; then
+            echo "Backup file size too small ($FILE_SIZE bytes)" >&2
+            exit 1
+          fi
       - name: Upload backup artifact
         if: success()
         continue-on-error: true

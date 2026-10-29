@@ -3,6 +3,7 @@ import decimal
 import datetime
 import json
 import logging
+import time
 import psycopg2
 from psycopg2 import pool
 from flask import Flask, jsonify, request, render_template, abort
@@ -67,21 +68,68 @@ except Exception as exc:
 
 PAGE_SIZE = 25
 
+def _reset_pool():
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
+        _pool = None
+
 def _conn():
     global _pool
-    if _pool is None:
+    for attempt in range(3):
+        if _pool is None:
+            try:
+                _pool = _make_pool()
+            except Exception as exc:
+                if attempt == 2:
+                    logger.error("Failed to lazily create DB connection pool: %s", exc)
+                    raise RuntimeError("Database connection pool is not available") from exc
+                time.sleep(0.5 * (attempt + 1))
+                continue
+        conn = None
         try:
-            _pool = _make_pool()
+            conn = _pool.getconn()
+            if conn.closed != 0:
+                try:
+                    _pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+                conn = None
+                continue
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            return conn
         except Exception as exc:
-            logger.error("Failed to lazily create DB connection pool: %s", exc)
-            raise RuntimeError("Database connection pool is not available") from exc
-    return _pool.getconn()
+            if conn is not None:
+                try:
+                    _pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+                conn = None
+            if attempt == 2:
+                logger.error("Failed to acquire healthy DB connection: %s", exc)
+                raise
+            time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError("Could not acquire database connection")
 
-def _put(conn):
+def _put(conn, error: bool = False):
+    global _pool
+    if conn is None or _pool is None:
+        return
     try:
-        _pool.putconn(conn)
+        if error or conn.closed != 0:
+            _pool.putconn(conn, close=True)
+        else:
+            conn.rollback()
+            _pool.putconn(conn)
     except Exception:
-        pass
+        try:
+            _pool.putconn(conn, close=True)
+        except Exception:
+            pass
 
 def _serialise(obj):
     if isinstance(obj, decimal.Decimal):
@@ -99,6 +147,7 @@ def _json(data):
 @app.get("/health")
 def health():
     conn = None
+    has_error = False
     try:
         conn = _conn()
         with conn.cursor() as cur:
@@ -107,11 +156,12 @@ def health():
             current_rates = cur.fetchone()[0]
         return jsonify({"status": "ok", "current_rates": current_rates}), 200
     except Exception as exc:
+        has_error = True
         logger.warning("Health check warming up: %s", exc)
         return jsonify({"status": "ok", "warning": "warming_up"}), 200
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
 
 @app.get("/metrics")
 def metrics():
@@ -129,15 +179,17 @@ def metrics():
 @app.get("/banks")
 def banks():
     conn = None
+    has_error = False
     try:
         conn = _conn()
         rows = get_available_banks(conn)
     except Exception as exc:
+        has_error = True
         logger.error("GET /banks failed: %s", exc)
         return jsonify({"error": "internal server error"}), 500
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
     return _json(rows)
 
 @app.get("/rates")
@@ -151,29 +203,33 @@ def rates():
         except ValueError:
             return jsonify({"error": "invalid as_of date, use YYYY-MM-DD"}), 400
     conn = None
+    has_error = False
     try:
         conn = _conn()
         rows = get_trusted_rates(conn, source_id=source_id, as_of=as_of_date)
     except Exception as exc:
+        has_error = True
         logger.error("GET /rates failed: %s", exc)
         return jsonify({"error": "internal server error"}), 500
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
     return _json(rows)
 
 @app.get("/rates/by-currency/<code>")
 def rates_by_currency(code: str):
     conn = None
+    has_error = False
     try:
         conn = _conn()
         rows = get_trusted_rates_by_currency(conn, code.upper())
     except Exception as exc:
+        has_error = True
         logger.error("GET /rates/by-currency/%s failed: %s", code, exc)
         return jsonify({"error": "internal server error"}), 500
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
     if not rows:
         abort(404)
     return _json(rows)
@@ -181,15 +237,17 @@ def rates_by_currency(code: str):
 @app.get("/rates/<int:source_id>")
 def rates_for_source(source_id: int):
     conn = None
+    has_error = False
     try:
         conn = _conn()
         rows = get_trusted_rates(conn, source_id=source_id)
     except Exception as exc:
+        has_error = True
         logger.error("GET /rates/%s failed: %s", source_id, exc)
         return jsonify({"error": "internal server error"}), 500
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
     if not rows:
         abort(404)
     return _json(rows)
@@ -197,15 +255,17 @@ def rates_for_source(source_id: int):
 @app.get("/review")
 def review():
     conn = None
+    has_error = False
     try:
         conn = _conn()
         pending = get_pending_review_observations(conn)
     except Exception as exc:
+        has_error = True
         pending = []
     finally:
         if conn:
-            _put(conn)
-    return render_template("review.html", pending=pending, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+            _put(conn, error=has_error)
+    return render_template("review.html", pending=pending, now=datetime.datetime.now(datetime.timezone.utc))
 
 @app.post("/review/decide")
 def review_decide():
@@ -215,6 +275,7 @@ def review_decide():
         return jsonify({"error": "bad request"}), 400
 
     conn = None
+    has_error = False
     try:
         conn = _conn()
         with conn.cursor() as cur:
@@ -276,13 +337,17 @@ def review_decide():
                 """, (obs_ids,))
         conn.commit()
     except Exception as exc:
+        has_error = True
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         logger.error("POST /review/decide failed: %s", exc)
         return jsonify({"error": "internal server error"}), 500
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
     return __import__('flask').redirect("/review")
 
 @app.get("/usd")
@@ -291,6 +356,7 @@ def usd_matrix():
     if category not in ("transactional", "cash"):
         category = "transactional"
     conn = None
+    has_error = False
     try:
         conn = _conn()
         with conn.cursor() as cur:
@@ -316,11 +382,12 @@ def usd_matrix():
             """, (category,))
             rows = cur.fetchall()
     except Exception as exc:
+        has_error = True
         logger.error("GET /usd failed: %s", exc)
         rows = []
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
 
     matrix = {}
     banks_set = {}
@@ -377,6 +444,7 @@ def ui():
     major_only = (filt == "major")
 
     conn = None
+    has_error = False
     try:
         conn = _conn()
         currencies   = get_available_currencies(conn)
@@ -425,13 +493,14 @@ def ui():
                 matrix["currencies"] = [c for c in matrix["currencies"] if q in c]
 
     except Exception as exc:
+        has_error = True
         logger.error("GET / (view=%s) failed: %s", view, exc)
         rows, currencies, banks, suggestions = [], [], [], {"currencies": [], "banks": []}
         bank_data, matrix, hist_rows, dates = {}, None, [], []
         error = "Failed to load data. Please try again."
     finally:
         if conn:
-            _put(conn)
+            _put(conn, error=has_error)
 
     max_buying = None
     if view == "compare" and rows:
