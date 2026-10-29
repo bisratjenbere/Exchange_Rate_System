@@ -27,16 +27,20 @@ jobs:
           python -m scheduler.run_job
       - name: Create database backup
         if: success()
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           set -eo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
           mkdir -p backups
           DUMP_URL="${DATABASE_URL/-pooler/}"
           pg_dump "$DUMP_URL" | gzip > backups/exchange_rates_backup_latest.sql.gz
       - name: Upload backup artifact
         if: success()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: neon-database-backup
