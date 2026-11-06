@@ -82,7 +82,7 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
 
     if action == "duplicate":
         if not is_fallback and record.effective_date is not None:
-            _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, record.effective_date)
+            _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date)
         result.duplicates += 1
         return
 
@@ -162,7 +162,7 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
                                            category_id, record.effective_date, fetched_at)
 
     if is_current and not is_fallback and record.effective_date is not None:
-        _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, record.effective_date)
+        _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date)
 
     obs_id = insert_observation(
         conn=conn,
@@ -212,7 +212,7 @@ def _retire_older_current(conn, source_id: int, currency_code: str, category_id)
             (source_id, currency_code, category_id),
         )
 
-def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, effective_date):
+def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date):
     if effective_date is None:
         return
     with conn.cursor() as cur:
@@ -222,8 +222,8 @@ def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str
                WHERE source_id = %s
                  AND source_currency_code = %s
                  AND is_current = TRUE
-                 AND (is_fallback = TRUE OR effective_date < %s)""",
-            (source_id, currency_code, effective_date),
+                 AND (is_fallback = TRUE OR (category_id IS NOT DISTINCT FROM %s AND effective_date < %s))""",
+            (source_id, currency_code, category_id, effective_date),
         )
 
 def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,

@@ -316,3 +316,39 @@ def test_older_native_does_not_overwrite_newer_active(db):
         assert cur.fetchone()[0] is True
         cur.execute("SELECT is_current FROM rate_observation WHERE collection_run_id = %s", (run2,))
         assert cur.fetchone()[0] is False
+
+def test_native_newer_date_does_not_retire_different_category_active(db):
+    bank_id, source_id, cat_id = _create_seed_data(db)
+    run1 = start_run(db, source_id)
+    rec_txn = AdapterRecord(
+        source_currency_code="USD",
+        currency_name="US Dollar",
+        buying_rate=Decimal("161.7825"),
+        selling_rate=Decimal("165.0182"),
+        category="transactional",
+        effective_date=date(2026, 11, 5),
+        effective_date_basis="source_published",
+    )
+    ingest(db, [rec_txn], source_id, run1, is_fallback=False)
+    finish_run(db, run1, "success", records_found=1, records_accepted=1, is_fallback=False)
+
+    run2 = start_run(db, source_id)
+    rec_cash = AdapterRecord(
+        source_currency_code="USD",
+        currency_name="US Dollar",
+        buying_rate=Decimal("161.7880"),
+        selling_rate=Decimal("165.0238"),
+        category="cash",
+        effective_date=date(2026, 11, 6),
+        effective_date_basis="source_published",
+    )
+    ingest(db, [rec_cash], source_id, run2, is_fallback=False)
+    finish_run(db, run2, "success", records_found=1, records_accepted=1, is_fallback=False)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT id, is_current, category_id FROM rate_observation WHERE collection_run_id = %s", (run1,))
+        txn_row = cur.fetchone()
+        assert txn_row[1] is True
+        cur.execute("SELECT id, is_current, category_id FROM rate_observation WHERE collection_run_id = %s", (run2,))
+        cash_row = cur.fetchone()
+        assert cash_row[1] is True
