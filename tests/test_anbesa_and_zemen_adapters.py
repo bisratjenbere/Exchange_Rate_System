@@ -80,3 +80,59 @@ def test_zemen_adapter_parses_without_error():
     assert result.records[0].category == "transactional"
     assert result.records[0].buying_rate == Decimal("163.50")
     assert result.records[0].selling_rate == Decimal("166.50")
+
+
+def test_zemen_adapter_parses_day_and_average():
+    adapter = ZemenAdapter()
+    payload = json.dumps({
+        "status": "success",
+        "date": "2026-11-06",
+        "avg_date": "2026-11-05",
+        "rates": {
+            "day": [
+                {
+                    "currency_code": "USD",
+                    "buying_rate": "161.0980",
+                    "selling_rate": "164.3200",
+                    "cash_buying_rate": "162.7090",
+                    "cash_selling_rate": "165.9632",
+                    "exchange_id": 101,
+                    "post_date": "2026-11-06 08:30:00",
+                }
+            ],
+            "average": [
+                {
+                    "currency_code": "USD",
+                    "avg_buying_rate": "162.9642",
+                    "avg_selling_rate": "166.4068",
+                    "buying_rate": "160.5000",
+                    "selling_rate": "163.7000",
+                    "cash_buying_rate": "162.0000",
+                    "cash_selling_rate": "165.2000",
+                    "exchange_id": 100,
+                    "post_date": "2026-11-05 16:30:00",
+                }
+            ]
+        },
+    })
+    result = adapter.parse(payload)
+
+    assert result.is_success()
+    assert len(result.records) == 3
+
+    by_cat = {r.category: r for r in result.records}
+    assert "cash" in by_cat
+    assert "transactional" in by_cat
+    assert "weighted_average" in by_cat
+
+    assert by_cat["cash"].buying_rate == Decimal("162.7090")
+    assert by_cat["cash"].selling_rate == Decimal("165.9632")
+    assert by_cat["cash"].effective_date == date(2026, 11, 6)
+
+    assert by_cat["transactional"].buying_rate == Decimal("161.0980")
+    assert by_cat["transactional"].selling_rate == Decimal("164.3200")
+    assert by_cat["transactional"].effective_date == date(2026, 11, 6)
+
+    assert by_cat["weighted_average"].buying_rate == Decimal("162.9642")
+    assert by_cat["weighted_average"].selling_rate == Decimal("166.4068")
+    assert by_cat["weighted_average"].effective_date == date(2026, 11, 5)

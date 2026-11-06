@@ -103,6 +103,35 @@ def test_ingest_duplicate_skipped(db):
     assert result.duplicates == 1
     assert result.accepted == 0
 
+def test_ingest_duplicate_promotes_fallback(db):
+    bank_id = _make_bank(db, "IGFB")
+    src_id = _make_source(db, bank_id, "igfb")
+    run_id1 = _make_run(db, src_id)
+
+    rec = _record(currency="USD")
+    res1 = ingest(db, [rec], src_id, run_id1, is_fallback=True)
+    db.commit()
+    _finish_run(db, run_id1)
+    assert res1.accepted == 1
+
+    with db.cursor() as cur:
+        cur.execute("SELECT is_fallback, is_current FROM rate_observation WHERE source_id = %s", (src_id,))
+        row = cur.fetchone()
+        assert row[0] is True
+        assert row[1] is True
+
+    run_id2 = _make_run(db, src_id)
+    res2 = ingest(db, [rec], src_id, run_id2, is_fallback=False)
+    db.commit()
+    _finish_run(db, run_id2)
+
+    assert res2.duplicates == 1
+    with db.cursor() as cur:
+        cur.execute("SELECT is_fallback, is_current FROM rate_observation WHERE source_id = %s", (src_id,))
+        row = cur.fetchone()
+        assert row[0] is False
+        assert row[1] is True
+
 def test_ingest_intraday_update_auto_promoted(db):
     bank_id = _make_bank(db, "IG3A")
     src_id = _make_source(db, bank_id, "ig3a")

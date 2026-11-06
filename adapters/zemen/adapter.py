@@ -71,8 +71,18 @@ class ZemenAdapter(FieldStructureMixin, JSONAdapter):
                 if not code:
                     continue
 
+                avg_buy = row.get("avg_buying_rate")
+                avg_sell = row.get("avg_selling_rate")
+                if not avg_buy and not avg_sell:
+                    continue
+
+                row_data = {
+                    "buying_rate": avg_buy,
+                    "selling_rate": avg_sell,
+                }
+
                 detected_records = self.detect_and_emit(
-                    data=row,
+                    data=row_data,
                     currency=code,
                     effective_date=avg_date,
                     effective_date_basis=avg_basis,
@@ -80,10 +90,11 @@ class ZemenAdapter(FieldStructureMixin, JSONAdapter):
                 )
 
                 for rec in detected_records:
-                    if rec.category == 'UNKNOWN':
-                        rec.category = avg_category
+                    rec.category = avg_category
                     if isinstance(rec.raw_excerpt, dict):
                         rec.raw_excerpt["post_date"] = row.get("post_date")
+                        rec.raw_excerpt["avg_buying_rate"] = avg_buy
+                        rec.raw_excerpt["avg_selling_rate"] = avg_sell
 
                 result.records.extend(detected_records)
 

@@ -81,8 +81,18 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         action, existing_id = classify_observation(fingerprint, logical_key, conn)
 
     if action == "duplicate":
-        if not is_fallback and record.effective_date is not None:
-            _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date)
+        if not is_fallback:
+            if record.effective_date is not None:
+                _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date)
+            if existing_id is not None:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE rate_observation
+                           SET is_fallback = FALSE,
+                               is_current = TRUE
+                           WHERE id = %s AND is_fallback = TRUE""",
+                        (existing_id,)
+                    )
         result.duplicates += 1
         return
 
