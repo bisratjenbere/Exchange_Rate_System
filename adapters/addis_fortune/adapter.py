@@ -81,6 +81,15 @@ class AddisFortuneAdapter(FieldStructureMixin, BankAdapter):
         super().__init__()
         self._slug = slug
         self._url = BASE_URL.format(slug=slug)
+        if slug == "anbesa-bank-1":
+            self.FIELD_CONFIG = {
+                "field_mappings": {
+                    "cashBuying": "transactional",
+                    "cashSelling": "transactional",
+                    "transBuying": "cash",
+                    "transSelling": "cash",
+                }
+            }
 
     def get_source_url(self) -> str:
         return self._url

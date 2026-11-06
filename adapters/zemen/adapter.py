@@ -5,6 +5,7 @@ from typing import Optional
 
 from adapters.base import JSONAdapter, ParseResult
 from field_detection.mixin import FieldStructureMixin
+from pipeline.category_normalizer import normalize_category
 
 ADAPTER_KEY = "zemen_ajax"
 SOURCE_URL = "https://zemenbank.com/wp-admin/admin-ajax.php"
