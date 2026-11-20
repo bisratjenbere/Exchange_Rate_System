@@ -2,7 +2,7 @@ import uuid
 import pytest
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
-from unittest.mock import Mock
+from unittest.mock import Mock, patch, MagicMock
 
 from tests.db_utils import get_conn, apply_migrations, reset_schema
 from domain.records import AdapterRecord
@@ -352,3 +352,87 @@ def test_native_newer_date_does_not_retire_different_category_active(db):
         cur.execute("SELECT id, is_current, category_id FROM rate_observation WHERE collection_run_id = %s", (run2,))
         cash_row = cur.fetchone()
         assert cash_row[1] is True
+
+
+def test_zero_records_triggers_fallback_without_unique_violation(db):
+    bank_id, source_id, cat_id = _create_seed_data(db)
+    mock_adapter = Mock()
+    mock_adapter.parse.return_value = []
+
+    fallback_records = [
+        AdapterRecord(
+            source_currency_code="USD",
+            currency_name="US Dollar",
+            buying_rate=Decimal("165.00"),
+            selling_rate=Decimal("168.00"),
+            category="cash",
+            effective_date=date.today(),
+            effective_date_basis="source_published",
+        )
+    ]
+    mock_af = Mock()
+    mock_af.fetch_raw.return_value = ("<html></html>", 200)
+    mock_af.get_source_url.return_value = "https://addisfortune.news"
+    mock_af.parse.return_value = (fallback_records, [])
+
+    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
+         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
+         patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af):
+        from scheduler.runner import run_source
+        res = run_source(db, source_id)
+
+    assert res["status"] in ("success", "partial_success")
+    assert res["accepted"] == 1
+
+    with db.cursor() as cur:
+        cur.execute("SELECT status, error_code FROM collection_run WHERE source_id = %s ORDER BY id ASC", (source_id,))
+        runs = cur.fetchall()
+        assert len(runs) == 2
+        assert runs[0][0] == "failed"
+        assert runs[0][1] == "zero_records_extracted"
+        assert runs[1][0] == "success"
+
+
+def test_scoped_stale_orphan_observation_pruning(db):
+    bank_id, source_id, cat_id = _create_seed_data(db)
+    run_old = start_run(db, source_id)
+    rec_old = AdapterRecord(
+        source_currency_code="KES",
+        currency_name="Kenyan Shilling",
+        buying_rate=Decimal("1.20"),
+        selling_rate=Decimal("1.25"),
+        category="cash",
+        effective_date=date.today() - timedelta(days=20),
+        effective_date_basis="source_published",
+    )
+    ingest(db, [rec_old], source_id, run_old, is_fallback=False)
+    finish_run(db, run_old, "success", records_found=1, records_accepted=1, is_fallback=False)
+
+    from scheduler.runner import _expire_stale_fallback_current
+    _expire_stale_fallback_current(db, source_id)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT is_current FROM rate_observation WHERE collection_run_id = %s", (run_old,))
+        assert cur.fetchone()[0] is True
+
+    run_fresh = start_run(db, source_id)
+    rec_fresh = AdapterRecord(
+        source_currency_code="USD",
+        currency_name="US Dollar",
+        buying_rate=Decimal("165.00"),
+        selling_rate=Decimal("168.00"),
+        category="cash",
+        effective_date=date.today(),
+        effective_date_basis="source_published",
+    )
+    ingest(db, [rec_fresh], source_id, run_fresh, is_fallback=False)
+    finish_run(db, run_fresh, "success", records_found=1, records_accepted=1, is_fallback=False)
+
+    _expire_stale_fallback_current(db, source_id)
+
+    with db.cursor() as cur:
+        cur.execute("SELECT is_current FROM rate_observation WHERE collection_run_id = %s", (run_old,))
+        assert cur.fetchone()[0] is False
+        cur.execute("SELECT is_current FROM rate_observation WHERE collection_run_id = %s", (run_fresh,))
+        assert cur.fetchone()[0] is True

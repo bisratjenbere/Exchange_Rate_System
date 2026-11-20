@@ -344,7 +344,7 @@ def test_run_source_success(db):
     src_id = _make_source(db, bank_id, "rs1")
     db.commit()
 
-    fixture_records = [_record(currency="USD")]
+    fixture_records = [_record(currency="USD", effective_date=date.today())]
 
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = fixture_records
@@ -406,3 +406,40 @@ def test_run_all_iterates_enabled(db):
 
     assert isinstance(results, list)
     assert any(r["source_id"] == src_id for r in results)
+
+
+def test_zero_records_without_fallback_marks_run_failed(db):
+    bank_id = _make_bank(db, "ZR1")
+    src_id = _make_source(db, bank_id, "zr1")
+    db.commit()
+
+    mock_adapter = MagicMock()
+    mock_adapter.parse.return_value = []
+
+    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
+         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
+         patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
+        result = run_source(db, src_id)
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "zero_records_extracted"
+
+    with db.cursor() as cur:
+        cur.execute("SELECT status, error_code, records_found FROM collection_run WHERE source_id = %s", (src_id,))
+        row = cur.fetchone()
+        assert row[0] == "failed"
+        assert row[1] == "zero_records_extracted"
+        assert row[2] == 0
+
+
+def test_inverted_category_spread_flagged_suspicious(db):
+    bank_id = _make_bank(db, "INV1")
+    src_id = _make_source(db, bank_id, "inv1")
+    run_id = _make_run(db, src_id)
+
+    rec_cash = _record(currency="USD", buying="160.00", selling="163.00", category="cash")
+    rec_txn = _record(currency="USD", buying="163.00", selling="166.00", category="transactional")
+
+    res = ingest(db, [rec_cash, rec_txn], src_id, run_id)
+    assert res.suspicious is True

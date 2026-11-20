@@ -1,12 +1,14 @@
+import json
+from datetime import datetime
 from bs4 import BeautifulSoup
 
-from adapters.base import HTMLTableAdapter, ParseResult
+from adapters.base import JSONAdapter, ParseResult
 from field_detection.mixin import FieldStructureMixin
 
 ADAPTER_KEY = "bunna_html"
-SOURCE_URL = "https://bunnabanksc.com/foreign-exchange/"
+SOURCE_URL = "https://mb.bunnabanksc.com/api/v1/user/public/forex"
 
-class BunnaAdapter(FieldStructureMixin, HTMLTableAdapter):
+class BunnaAdapter(FieldStructureMixin, JSONAdapter):
 
     FIELD_CONFIG = {}
 
@@ -16,18 +18,60 @@ class BunnaAdapter(FieldStructureMixin, HTMLTableAdapter):
     def get_adapter_key(self) -> str:
         return ADAPTER_KEY
 
-    def _process_tables(self, soup: BeautifulSoup, tables: list, **options) -> ParseResult:
-        result = ParseResult()
+    def parse(self, raw_content: str, **options) -> ParseResult:
+        if raw_content and raw_content.strip().startswith("<"):
+            soup = BeautifulSoup(raw_content, "html.parser")
+            tables = soup.find_all("table")
+            result = ParseResult()
+            if not tables:
+                result.add_error("No tables found in HTML")
+                return result
+            try:
+                records = self._parse_wide_table(tables[0])
+                result.records.extend(records)
+            except Exception as exc:
+                result.add_error(f"table_0:{exc}")
+            return result
+        return super().parse(raw_content, **options)
 
-        if not tables:
-            result.add_error("table_0:missing")
+    def _process_data(self, data, **options) -> ParseResult:
+        result = ParseResult()
+        items = data.get("content", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        if not items:
+            result.add_error("empty_content")
             return result
 
-        try:
-            records = self._parse_wide_table(tables[0])
-            result.records.extend(records)
-        except Exception as exc:
-            result.add_error(f"table_0:{exc}")
+        for item in items:
+            code = item.get("currencyCode", "").strip().upper()
+            if not code:
+                continue
+            name = item.get("currency")
+            eff_date = None
+            val_date_str = item.get("valueDate")
+            if val_date_str:
+                try:
+                    eff_date = datetime.fromisoformat(val_date_str).date()
+                except Exception:
+                    eff_date = None
+
+            basis = "source_published" if eff_date else "collection_date_fallback"
+
+            row_dict = {
+                "cash_buying": str(item.get("buying")) if item.get("buying") is not None else None,
+                "cash_selling": str(item.get("selling")) if item.get("selling") is not None else None,
+                "transactional_buying": str(item.get("transactionBuying")) if item.get("transactionBuying") is not None else None,
+                "transactional_selling": str(item.get("transactionSelling")) if item.get("transactionSelling") is not None else None,
+            }
+
+            detected = self.detect_and_emit(
+                data=row_dict,
+                currency=code,
+                currency_name=name,
+                effective_date=eff_date,
+                effective_date_basis=basis,
+                mapping_notes=["source=bunna_mb_api"],
+            )
+            result.records.extend(detected)
 
         return result
 
@@ -59,7 +103,7 @@ class BunnaAdapter(FieldStructureMixin, HTMLTableAdapter):
                 currency_name=currency_name or None,
                 effective_date=None,
                 effective_date_basis="collection_date_fallback",
-                mapping_notes=["date_ambiguous:no_source_published_date", "avg_cols_may_be_js_rendered:TO_VERIFY"]
+                mapping_notes=["date_ambiguous:no_source_published_date"],
             )
 
             records.extend(detected_records)

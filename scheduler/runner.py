@@ -154,22 +154,35 @@ class Scheduler:
 
             all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
             if len(records) == 0 or all_stale:
+                err_code = "zero_records_extracted" if len(records) == 0 else "stale_feed"
+                err_summary = "Primary returned 0 records; fallback invoked" if len(records) == 0 else "Primary returned stale records; fallback invoked"
+                finish_run(
+                    conn, run_id, "failed",
+                    http_status=http_status,
+                    records_found=len(records),
+                    records_accepted=0,
+                    records_flagged=0,
+                    records_duplicated=0,
+                    error_code=err_code,
+                    error_summary=err_summary,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    is_fallback=False,
+                )
+                needs_alert = _increment_failure_counter(conn, source_id, err_code)
+                if needs_alert:
+                    _write_alert(conn, source_id, err_code, err_summary)
+                conn.commit()
+
                 af_res = _try_af_fallback(conn, source_id, adapter_key, self.config.USER_AGENT)
                 if af_res is not None:
-                    finish_run(
-                        conn, run_id, "failed",
-                        http_status=http_status,
-                        records_found=len(records),
-                        records_accepted=0,
-                        records_flagged=0,
-                        records_duplicated=0,
-                        error_code="parse_failure",
-                        error_summary="Primary returned stale or 0 records; fallback invoked",
-                        duration_ms=int((time.monotonic() - t0) * 1000),
-                        is_fallback=False,
-                    )
-                    conn.commit()
                     return af_res
+
+                return {
+                    "source_id": source_id,
+                    "status": "failed",
+                    "error_code": err_code,
+                    "detail": err_summary,
+                }
 
             if schema_changed:
                 new_fp = adapter.schema_fingerprint(raw_content)
@@ -333,23 +346,36 @@ def run_source(conn, source_id: int) -> dict:
 
         all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
         if len(records) == 0 or all_stale:
+            err_code = "zero_records_extracted" if len(records) == 0 else "stale_feed"
+            err_summary = "Primary returned 0 records; fallback invoked" if len(records) == 0 else "Primary returned stale records; fallback invoked"
+            finish_run(
+                conn, run_id, "failed",
+                http_status=http_status,
+                records_found=len(records),
+                records_accepted=0,
+                records_flagged=0,
+                records_duplicated=0,
+                error_code=err_code,
+                error_summary=err_summary,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                is_fallback=False,
+            )
+            needs_alert = _increment_failure_counter(conn, source_id, err_code)
+            if needs_alert:
+                _write_alert(conn, source_id, err_code, err_summary)
+            conn.commit()
+
             config = Config()
             af_result = _try_af_fallback_old(conn, source_id, adapter_key, config.USER_AGENT)
             if af_result:
-                finish_run(
-                    conn, run_id, "failed",
-                    http_status=http_status,
-                    records_found=len(records),
-                    records_accepted=0,
-                    records_flagged=0,
-                    records_duplicated=0,
-                    error_code="parse_failure",
-                    error_summary="Primary returned stale or 0 records; fallback invoked",
-                    duration_ms=int((time.monotonic() - t0) * 1000),
-                    is_fallback=False,
-                )
-                conn.commit()
                 return af_result
+
+            return {
+                "source_id": source_id,
+                "status": "failed",
+                "error_code": err_code,
+                "detail": err_summary,
+            }
 
         if schema_changed:
             new_fp = adapter.schema_fingerprint(raw_content)
@@ -662,6 +688,8 @@ def _build_url(base_url: str, adapter_key: str) -> str:
     if adapter_key == "cbe_api":
         sep = "&" if "?" in base_url else "?"
         return f"{base_url}{sep}Date={today}"
+    if adapter_key == "bunna_html" and "bunnabanksc.com/foreign-exchange" in base_url:
+        return "https://mb.bunnabanksc.com/api/v1/user/public/forex"
     return base_url
 
 def _store_raw_capture(conn, run_id: int, reason: str, raw_content: str):
@@ -797,4 +825,18 @@ def _expire_stale_fallback_current(conn, source_id: int):
                  AND is_current = TRUE
                  AND effective_date < CURRENT_DATE - %s""",
             (source_id, FALLBACK_TTL_DAYS),
+        )
+        cur.execute(
+            """UPDATE rate_observation
+               SET is_current = FALSE
+               WHERE source_id = %s
+                 AND is_current = TRUE
+                 AND effective_date < CURRENT_DATE - INTERVAL '7 days'
+                 AND EXISTS (
+                     SELECT 1 FROM rate_observation
+                     WHERE source_id = %s
+                       AND is_current = TRUE
+                       AND effective_date >= CURRENT_DATE - INTERVAL '3 days'
+                 )""",
+            (source_id, source_id),
         )

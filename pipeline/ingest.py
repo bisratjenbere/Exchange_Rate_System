@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
@@ -49,6 +50,17 @@ def ingest(conn, records: list, source_id: int, run_id: int,
                 cur.execute("RELEASE SAVEPOINT _ingest_sp")
             result.errors.append((record.source_currency_code, str(exc)))
             result.rejected += 1
+
+    by_currency = {}
+    for record in records:
+        by_currency.setdefault(record.source_currency_code, []).append(record)
+
+    for curr, recs in by_currency.items():
+        cash_rec = next((r for r in recs if r.category == "cash"), None)
+        txn_rec = next((r for r in recs if r.category == "transactional"), None)
+        if cash_rec and txn_rec and cash_rec.buying_rate is not None and txn_rec.buying_rate is not None:
+            if cash_rec.buying_rate < (txn_rec.buying_rate - Decimal("0.05")):
+                result.suspicious = True
 
     return result
 
