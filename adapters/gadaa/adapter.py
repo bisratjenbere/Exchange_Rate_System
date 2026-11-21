@@ -38,9 +38,6 @@ class GadaaAdapter(FieldStructureMixin, JSONAdapter):
                     continue
 
                 effective_date = _parse_date(row.get("updated_at"))
-                if effective_date and (date.today() - effective_date).days > 3:
-                    result.add_warning(f"{code}:{row.get('market_type')}: stale date {effective_date}, skipped")
-                    continue
                 date_basis = "source_inferred" if effective_date else "collection_date_fallback"
 
                 detected_records = self.detect_and_emit(
