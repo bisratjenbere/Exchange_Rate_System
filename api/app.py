@@ -361,10 +361,11 @@ def usd_matrix():
         conn = _conn()
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT ON (rs.id, o.fetched_at::date)
-                    b.name AS bank_name,
-                    b.code AS bank_code,
-                    o.fetched_at::date AS effective_date,
+                SELECT DISTINCT ON (rs.id, o.effective_date)
+                    rs.id   AS source_id,
+                    b.name  AS bank_name,
+                    b.code  AS bank_code,
+                    o.effective_date,
                     o.buying_rate,
                     o.selling_rate
                 FROM rate_observation o
@@ -377,28 +378,63 @@ def usd_matrix():
                   AND rs.is_enabled = TRUE
                   AND o.source_currency_code = 'USD'
                   AND rc.code = %s
-                  AND o.fetched_at::date >= CURRENT_DATE - 30
-                ORDER BY rs.id, o.fetched_at::date DESC, o.buying_rate DESC NULLS LAST
+                  AND o.effective_date >= CURRENT_DATE - 31
+                ORDER BY rs.id, o.effective_date, o.buying_rate DESC NULLS LAST
             """, (category,))
-            rows = cur.fetchall()
+            rate_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT cr.source_id, cr.started_at::date AS run_date,
+                       bool_or(cr.status = 'success') AS had_success
+                FROM collection_run cr
+                WHERE cr.started_at >= CURRENT_DATE - 31
+                GROUP BY cr.source_id, cr.started_at::date
+            """)
+            run_rows = cur.fetchall()
     except Exception as exc:
         has_error = True
         logger.error("GET /usd failed: %s", exc)
-        rows = []
+        rate_rows = []
+        run_rows = []
     finally:
         if conn:
             _put(conn, error=has_error)
 
-    matrix = {}
+    today = datetime.date.today()
+    all_dates = [today - datetime.timedelta(days=i) for i in range(31)]
+
+    successful_runs = set()
+    for source_id, run_date, had_success in run_rows:
+        if had_success:
+            successful_runs.add((source_id, run_date))
+
+    rates_by_source = {}
     banks_set = {}
-    for bank_name, bank_code, eff_date, buying, selling in rows:
+    for source_id, bank_name, bank_code, eff_date, buying, selling in rate_rows:
         if eff_date is None:
             continue
         banks_set[bank_code] = bank_name
-        matrix.setdefault(eff_date, {})[bank_code] = {
+        rates_by_source.setdefault(source_id, {})[eff_date] = {
+            "code": bank_code,
             "buying": buying,
             "selling": selling,
         }
+
+    matrix = {}
+    for source_id, date_rates in rates_by_source.items():
+        prev_rate = None
+        for d in sorted(all_dates):
+            if d in date_rates:
+                prev_rate = date_rates[d]
+                matrix.setdefault(d, {})[prev_rate["code"]] = {
+                    "buying": prev_rate["buying"],
+                    "selling": prev_rate["selling"],
+                }
+            elif prev_rate and (source_id, d) in successful_runs:
+                matrix.setdefault(d, {})[prev_rate["code"]] = {
+                    "buying": prev_rate["buying"],
+                    "selling": prev_rate["selling"],
+                }
 
     dates = sorted(matrix.keys(), reverse=True)
     banks = sorted(banks_set.keys())
