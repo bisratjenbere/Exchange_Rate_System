@@ -177,6 +177,34 @@ class Scheduler:
                 if af_res is not None:
                     return af_res
 
+                if all_stale and len(records) > 0:
+                    fetched_at = datetime.now(timezone.utc)
+                    result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
+                    duration_ms = int((time.monotonic() - t0) * 1000)
+                    finish_run(
+                        conn, run_id, "success",
+                        http_status=http_status,
+                        records_found=len(records),
+                        records_accepted=result.accepted,
+                        records_flagged=result.flagged,
+                        records_duplicated=result.duplicates,
+                        error_code="stale_feed",
+                        error_summary="Primary returned stale records; retained as standing rate",
+                        duration_ms=duration_ms,
+                        is_fallback=False,
+                    )
+                    repo.update_last_success(source_id)
+                    _reset_failure_counter(conn, source_id)
+                    conn.commit()
+                    return {
+                        "source_id": source_id,
+                        "status": "success",
+                        "accepted": result.accepted,
+                        "flagged": result.flagged,
+                        "rejected": result.rejected,
+                        "duplicates": result.duplicates,
+                    }
+
                 return {
                     "source_id": source_id,
                     "status": "failed",
@@ -369,6 +397,34 @@ def run_source(conn, source_id: int) -> dict:
             af_result = _try_af_fallback_old(conn, source_id, adapter_key, config.USER_AGENT)
             if af_result:
                 return af_result
+
+            if all_stale and len(records) > 0:
+                fetched_at = datetime.now(timezone.utc)
+                result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                finish_run(
+                    conn, run_id, "success",
+                    http_status=http_status,
+                    records_found=len(records),
+                    records_accepted=result.accepted,
+                    records_flagged=result.flagged,
+                    records_duplicated=result.duplicates,
+                    error_code="stale_feed",
+                    error_summary="Primary returned stale records; retained as standing rate",
+                    duration_ms=duration_ms,
+                    is_fallback=False,
+                )
+                _update_last_success_old(conn, source_id)
+                _reset_failure_counter(conn, source_id)
+                conn.commit()
+                return {
+                    "source_id": source_id,
+                    "status": "success",
+                    "accepted": result.accepted,
+                    "flagged": result.flagged,
+                    "rejected": result.rejected,
+                    "duplicates": result.duplicates,
+                }
 
             return {
                 "source_id": source_id,

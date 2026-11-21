@@ -436,3 +436,39 @@ def test_scoped_stale_orphan_observation_pruning(db):
         assert cur.fetchone()[0] is False
         cur.execute("SELECT is_current FROM rate_observation WHERE collection_run_id = %s", (run_fresh,))
         assert cur.fetchone()[0] is True
+
+
+def test_stale_feed_retained_when_no_fallback(db):
+    bank_id, source_id, cat_id = _create_seed_data(db)
+    stale_date = date.today() - timedelta(days=5)
+    stale_records = [
+        AdapterRecord(
+            source_currency_code="USD",
+            currency_name="US Dollar",
+            buying_rate=Decimal("165.00"),
+            selling_rate=Decimal("168.00"),
+            category="cash",
+            effective_date=stale_date,
+            effective_date_basis="source_published",
+        )
+    ]
+    mock_adapter = Mock()
+    mock_adapter.parse.return_value = stale_records
+
+    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
+         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
+         patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
+        from scheduler.runner import run_source
+        res = run_source(db, source_id)
+
+    assert res["status"] == "success"
+    assert res["accepted"] == 1
+
+    with db.cursor() as cur:
+        cur.execute("SELECT status, error_code FROM collection_run WHERE source_id = %s ORDER BY id ASC", (source_id,))
+        runs = cur.fetchall()
+        assert len(runs) == 1
+        assert runs[0][0] == "success"
+        assert runs[0][1] == "stale_feed"
+
