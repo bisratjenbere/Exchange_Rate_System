@@ -118,6 +118,28 @@ class AnbesaAdapter(FieldStructureMixin, HTMLTextAdapter):
                 headers.append([th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])])
         return hashlib.sha256(str({"tables": len(tables), "headers": headers}).encode()).hexdigest()
 
+def _detect_column_groups(header):
+    groups = []
+    i = 1
+    while i < len(header) - 1:
+        h_buy = header[i]
+        h_sell = header[i + 1]
+        is_buy = "buy" in h_buy
+        is_sell = "sell" in h_sell
+        if not (is_buy and is_sell):
+            i += 1
+            continue
+        if "cash" in h_buy or "cash" in h_sell:
+            groups.append((i, i + 1, "cash"))
+        elif "trans" in h_buy or "trans" in h_sell:
+            groups.append((i, i + 1, "transactional"))
+        elif "weight" in h_buy or "weight" in h_sell:
+            groups.append((i, i + 1, "weighted_average"))
+        else:
+            groups.append((i, i + 1, "transactional"))
+        i += 2
+    return groups
+
 def _parse_table(table, effective_date, date_basis, adapter_instance) -> list:
     rows = table.find_all("tr")
     if len(rows) < 2:
@@ -127,9 +149,14 @@ def _parse_table(table, effective_date, date_basis, adapter_instance) -> list:
     if not any(kw in " ".join(header) for kw in ["currency", "buying", "selling", "usd"]):
         return []
 
-    has_cash = any("cash" in h for h in header)
-    has_trans = any("trans" in h for h in header)
-    has_weighted = any("weight" in h for h in header)
+    col_groups = _detect_column_groups(header)
+
+    if not col_groups:
+        has_weighted = any("weight" in h for h in header)
+        if has_weighted:
+            col_groups = [(1, 2, "weighted_average")]
+        else:
+            col_groups = [(1, 2, "transactional")]
 
     records = []
     for row in rows[1:]:
@@ -142,13 +169,9 @@ def _parse_table(table, effective_date, date_basis, adapter_instance) -> list:
         if not code:
             continue
 
-        if has_cash and has_trans and len(cells) >= 5:
-            _add_with_detection(records, code, "cash", cells[1], cells[2], effective_date, date_basis, adapter_instance)
-            _add_with_detection(records, code, "transactional", cells[3], cells[4], effective_date, date_basis, adapter_instance)
-        elif has_weighted and len(cells) >= 3:
-            _add_with_detection(records, code, "weighted_average", cells[1], cells[2], effective_date, date_basis, adapter_instance)
-        elif len(cells) >= 3:
-            _add_with_detection(records, code, "transactional", cells[1], cells[2], effective_date, date_basis, adapter_instance)
+        for buy_col, sell_col, category in col_groups:
+            if sell_col < len(cells):
+                _add_with_detection(records, code, category, cells[buy_col], cells[sell_col], effective_date, date_basis, adapter_instance)
 
     return records
 
