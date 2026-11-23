@@ -593,3 +593,40 @@ def test_p3_savepoint_rolls_back_update_on_insert_failure(db):
         assert cur.fetchone()[0] is True, (
             "Savepoint guarantee broken: UPDATE is_current=FALSE was not rolled back."
         )
+
+
+# ---------------------------------------------------------------------------
+# P7 — Verification test: run_job entry point uses Scheduler, not legacy run_all
+# ---------------------------------------------------------------------------
+
+def test_p7_run_job_uses_scheduler_not_legacy_run_all():
+    """run_job.main must delegate to Scheduler().run_all, not the legacy run_all.
+
+    Before P7 this test FAILS because run_job imports and calls the legacy
+    module-level run_all which bypasses the circuit breaker.
+    After P7 the import is replaced with Scheduler and the test passes.
+    """
+    import ast
+    import inspect
+    import scheduler.run_job as run_job_module
+
+    source = inspect.getsource(run_job_module)
+    tree = ast.parse(source)
+
+    # Must NOT import legacy run_all at module level
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "scheduler.runner":
+                imported_names = [alias.name for alias in node.names]
+                assert "run_all" not in imported_names, (
+                    "run_job still imports legacy run_all — P7 not yet applied"
+                )
+
+    # Must import Scheduler
+    imports_scheduler = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "scheduler.runner":
+                if any(alias.name == "Scheduler" for alias in node.names):
+                    imports_scheduler = True
+    assert imports_scheduler, "run_job does not import Scheduler — P7 not yet applied"
