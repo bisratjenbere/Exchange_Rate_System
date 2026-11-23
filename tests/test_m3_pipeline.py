@@ -86,7 +86,7 @@ def _seed_category(cur, code="cash"):
 
 def _persist_record(db, record, source_id, run_id, category_id,
                     logical_key, identity_status, version=1, is_current=True):
-    fp = compute_fingerprint(record, source_id)
+    fp = compute_fingerprint(record, source_id, collection_date=record.effective_date or date(2026, 10, 10))
     return insert_observation(
         conn=db,
         record=record,
@@ -173,25 +173,29 @@ def test_buying_above_selling_is_warning():
 
 def test_fingerprint_deterministic():
     r = _record()
-    assert compute_fingerprint(r, 1) == compute_fingerprint(r, 1)
+    cd = r.effective_date
+    assert compute_fingerprint(r, 1, collection_date=cd) == compute_fingerprint(r, 1, collection_date=cd)
 
 def test_fingerprint_differs_on_value_change():
     r1 = _record(buying=Decimal("161.00"))
     r2 = _record(buying=Decimal("162.00"))
-    assert compute_fingerprint(r1, 1) != compute_fingerprint(r2, 1)
+    cd = r1.effective_date
+    assert compute_fingerprint(r1, 1, collection_date=cd) != compute_fingerprint(r2, 1, collection_date=cd)
 
 def test_fingerprint_differs_on_source_id():
     r = _record()
-    assert compute_fingerprint(r, 1) != compute_fingerprint(r, 2)
+    cd = r.effective_date
+    assert compute_fingerprint(r, 1, collection_date=cd) != compute_fingerprint(r, 2, collection_date=cd)
 
 def test_fingerprint_excludes_fetched_at():
     r = _record()
-    fp1 = compute_fingerprint(r, 1)
-    fp2 = compute_fingerprint(r, 1)
+    cd = r.effective_date
+    fp1 = compute_fingerprint(r, 1, collection_date=cd)
+    fp2 = compute_fingerprint(r, 1, collection_date=cd)
     assert fp1 == fp2
 
 def test_fingerprint_version_constant():
-    assert FINGERPRINT_VERSION in (1, 2)
+    assert FINGERPRINT_VERSION in (1, 2, 3)
 
 def test_identity_confirmed_with_source_record_key():
     r = _record(source_record_key="abc123")
@@ -240,7 +244,7 @@ def test_1_duplicate_fetch_no_new_row(db):
 
     r = _record(source_record_key="pub-001")
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date)
 
     _persist_record(db, r, sid, rid, cid, lkey, istatus)
     db.commit()
@@ -286,12 +290,12 @@ def test_4_changed_value_creates_candidate_not_correction(db):
 
     r1 = _record(buying=Decimal("161.00"), source_record_key="pub-004")
     lkey, istatus = build_identity(r1, sid)
-    fp1 = compute_fingerprint(r1, sid)
+    fp1 = compute_fingerprint(r1, sid, collection_date=r1.effective_date)
     prior_id = _persist_record(db, r1, sid, rid, cid, lkey, istatus)
     db.commit()
 
     r2 = _record(buying=Decimal("163.00"), source_record_key="pub-004")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date)
     action, existing_id = classify_observation(fp2, lkey, db)
     assert action == "changed"
     assert existing_id == prior_id
@@ -344,7 +348,7 @@ def test_5_confirmed_correction_creates_new_version(db):
     db.commit()
 
     r2 = _record(buying=Decimal("162.50"), source_record_key="pub-005")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date)
     new_id = commit_correction(
         conn=db,
         prior_obs_id=prior_id,
@@ -396,7 +400,7 @@ def test_6_ambiguous_identity_retained_and_flagged(db):
     assert istatus == IdentityStatus.AMBIGUOUS
     assert lkey is None
 
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=date(2026, 10, 10))
     obs_id = insert_observation(
         conn=db, record=r, source_id=sid, run_id=rid, category_id=cid,
         fingerprint=fp, logical_key=None,
@@ -434,7 +438,7 @@ def test_12_concurrent_correction_no_competing_current(db):
     db.commit()
 
     r2 = _record(buying=Decimal("162.00"), source_record_key="pub-012")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date)
     new_id = commit_correction(
         conn=db, prior_obs_id=prior_id, record=r2,
         source_id=sid, run_id=rid, category_id=cid,
@@ -445,7 +449,7 @@ def test_12_concurrent_correction_no_competing_current(db):
     db.commit()
 
     r3 = _record(buying=Decimal("163.00"), source_record_key="pub-012")
-    fp3 = compute_fingerprint(r3, sid)
+    fp3 = compute_fingerprint(r3, sid, collection_date=r3.effective_date)
     with pytest.raises(Exception):
         insert_observation(
             conn=db, record=r3, source_id=sid, run_id=rid, category_id=cid,
@@ -547,12 +551,12 @@ def test_gap_A_revert_goes_to_review_not_deduplicated(db):
 
     r1 = _record(buying=Decimal("161.00"), source_record_key="pub-A")
     lkey, istatus = build_identity(r1, sid)
-    fp1 = compute_fingerprint(r1, sid)
+    fp1 = compute_fingerprint(r1, sid, collection_date=r1.effective_date)
     prior_id = _persist_record(db, r1, sid, rid, cid, lkey, istatus, version=1)
     db.commit()
 
     r2 = _record(buying=Decimal("162.00"), source_record_key="pub-A")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date)
     new_id = commit_correction(
         conn=db, prior_obs_id=prior_id, record=r2,
         source_id=sid, run_id=rid, category_id=cid,
@@ -581,12 +585,12 @@ def test_gap_B_repeated_candidate_yields_one_open(db):
 
     r1 = _record(buying=Decimal("161.00"), source_record_key="pub-B")
     lkey, istatus = build_identity(r1, sid)
-    fp1 = compute_fingerprint(r1, sid)
+    fp1 = compute_fingerprint(r1, sid, collection_date=r1.effective_date)
     prior_id = _persist_record(db, r1, sid, rid, cid, lkey, istatus, version=1)
     db.commit()
 
     r2 = _record(buying=Decimal("163.00"), source_record_key="pub-B")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date)
 
     action, _ = classify_observation(fp2, lkey, db)
     assert action == "changed"
@@ -640,7 +644,7 @@ def test_gap_E_unknown_category_excluded_from_trusted(db):
     codes = {m["code"] for m in msgs}
     assert "UNKNOWN_CATEGORY" in codes
 
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or date(2026, 10, 10))
     lkey, istatus = build_identity(r, sid)
     obs_id = insert_observation(
         conn=db, record=r, source_id=sid, run_id=rid, category_id=None,
@@ -676,7 +680,7 @@ def test_gap_J_effective_date_basis_stored(db):
     assert lkey_fall is None
     assert istatus_fall == IdentityStatus.AMBIGUOUS
 
-    fp_fall = compute_fingerprint(r_fall, sid)
+    fp_fall = compute_fingerprint(r_fall, sid, collection_date=r_fall.effective_date or date(2026, 10, 10))
     id_fall = insert_observation(
         conn=db, record=r_fall, source_id=sid, run_id=rid, category_id=cid,
         fingerprint=fp_fall, logical_key=None,
@@ -709,11 +713,7 @@ def test_gap_J_effective_date_basis_stored(db):
 # ---------------------------------------------------------------------------
 
 def test_fingerprint_golden():
-    """Pin the exact SHA-256 output for a fixed input set.
-
-    If this test breaks after P5 that is expected — update the pinned value
-    and the Decimal-trailing-zeros test below at the same time.
-    """
+    """Pin the exact SHA-256 output for the v3 fingerprint (post-P5)."""
     r = AdapterRecord(
         source_currency_code="USD",
         category="cash",
@@ -723,17 +723,12 @@ def test_fingerprint_golden():
         effective_date_basis="source_published",
         source_publication_key=None,
     )
-    expected = "58257bfe678b34fd5ec6c5e7939f36d0281fa9c3233609a11b6268c143c573dd"
+    expected = "ea9c56e64fa0b08f0e5a3486bf7d5309538b7f402d1e664e11b4fb500fccd1df"
     assert compute_fingerprint(r, 1, collection_date=date(2024, 1, 15)) == expected
 
 
-def test_fingerprint_decimal_trailing_zeros_differ():
-    """Document current broken behaviour: Decimal('1.5') != Decimal('1.5000') in hash.
-
-    This test MUST FAIL after P5 (which canonicalises Decimal via normalize()).
-    When P5 is implemented, delete this test and replace it with one that asserts
-    the two values produce the SAME hash.
-    """
+def test_fingerprint_decimal_trailing_zeros_same():
+    """After P5 Decimal canonicalisation, trailing zeros must not affect the hash."""
     r_base = AdapterRecord(
         source_currency_code="USD",
         category="cash",
@@ -747,8 +742,4 @@ def test_fingerprint_decimal_trailing_zeros_differ():
     r2 = dc_replace(r_base, buying_rate=Decimal("1.5000"))
     fp1 = compute_fingerprint(r1, 1, collection_date=date(2024, 1, 15))
     fp2 = compute_fingerprint(r2, 1, collection_date=date(2024, 1, 15))
-    # Current (broken) behaviour: trailing zeros produce a different hash.
-    assert fp1 != fp2, (
-        "P5 has been applied — update this test to assert fp1 == fp2 "
-        "and pin the new golden hash in test_fingerprint_golden."
-    )
+    assert fp1 == fp2, "Decimal trailing zeros must not affect the fingerprint after P5"

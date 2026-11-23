@@ -125,7 +125,7 @@ def test_normal_aed_in_transactional_cash_and_weighted():
 
 def test_normal_fingerprints_unique():
     records, _ = parse(_load("normal"))
-    fps = [compute_fingerprint(r, source_id=1) for r in records]
+    fps = [compute_fingerprint(r, source_id=1, collection_date=r.effective_date or date.today()) for r in records]
     assert len(fps) == len(set(fps))
 
 def test_partial_one_table_returns_records_and_errors():
@@ -162,8 +162,8 @@ def test_no_date_in_weighted_falls_back():
 def test_duplicate_fetch_same_fingerprints():
     records1, _ = parse(_load("normal"))
     records2, _ = parse(_load("normal"))
-    fps1 = sorted(compute_fingerprint(r, 1) for r in records1)
-    fps2 = sorted(compute_fingerprint(r, 1) for r in records2)
+    fps1 = sorted(compute_fingerprint(r, 1, collection_date=r.effective_date or date.today()) for r in records1)
+    fps2 = sorted(compute_fingerprint(r, 1, collection_date=r.effective_date or date.today()) for r in records2)
     assert fps1 == fps2
 
 def test_schema_fingerprint_deterministic():

@@ -77,7 +77,7 @@ def _persist(db, record, source_id, run_id, category_id,
         lkey, istatus = build_identity(record, source_id)
     elif istatus is None:
         _, istatus = build_identity(record, source_id)
-    fp = compute_fingerprint(record, source_id)
+    fp = compute_fingerprint(record, source_id, collection_date=record.effective_date or NOW.date())
     return insert_observation(
         conn=db, record=record, source_id=source_id,
         run_id=run_id, category_id=category_id,
@@ -223,7 +223,7 @@ def test_acceptance_19_trusted_view_excludes_ambiguous(db):
         buying_rate=Decimal("161.00"), selling_rate=Decimal("164.00"),
         effective_date=None, effective_date_basis="unknown",
     )
-    fp = compute_fingerprint(r_amb, sid)
+    fp = compute_fingerprint(r_amb, sid, collection_date=r_amb.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r_amb, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp, logical_key=None, identity_status=IdentityStatus.AMBIGUOUS,
@@ -245,7 +245,7 @@ def test_acceptance_19_trusted_view_excludes_rejected(db):
 
     r = _record(src_key="pub-tv2")
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp, logical_key=lkey, identity_status=istatus,
@@ -266,7 +266,7 @@ def test_acceptance_19_trusted_view_excludes_unknown_category(db):
 
     r = _record(category="UNKNOWN", src_key="pub-tv3")
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r, source_id=sid, run_id=run_id, category_id=None,
         fingerprint=fp, logical_key=lkey, identity_status=istatus,
@@ -308,7 +308,7 @@ def test_gap_C_pending_review_shows_uncertainty_warning(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-tv5a")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -334,7 +334,7 @@ def test_acceptance_21_stale_rate_shows_staleness_warning(db):
     stale_date = date(2026, 9, 30)
     r = _record(src_key="pub-tv6", eff_date=stale_date)
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp, logical_key=lkey, identity_status=istatus,
@@ -400,7 +400,7 @@ def test_review_dismissed_candidate(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-rv1")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_obs_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -440,7 +440,7 @@ def test_review_confirmed_correction_via_workflow(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-rv2")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_obs_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -505,7 +505,7 @@ def test_p2_confirmed_correction_rolls_back_candidate_on_error(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-p2v1")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_obs_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -575,7 +575,7 @@ def test_p6_commit_correction_derives_version_from_locked_row(db):
     finish_run(db, run_id, "success")
 
     r2 = _record(buying=Decimal("165.00"), src_key="pub-p6v1")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
 
     # commit_correction must no longer accept prior_version_number
     import inspect
