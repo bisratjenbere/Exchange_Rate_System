@@ -64,7 +64,6 @@ def decide_candidate(
             row = cur.fetchone()
             prior_version_number = row[0] if row and row[0] else 1
 
-        conn.commit()
         new_id = commit_correction(
             conn=conn,
             prior_obs_id=prior_version_id,

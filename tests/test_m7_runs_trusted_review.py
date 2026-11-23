@@ -476,3 +476,72 @@ def test_review_confirmed_correction_via_workflow(db):
     assert row[0] is True
     assert row[1] == 2
     assert row[2] == prior_id
+
+
+# ---------------------------------------------------------------------------
+# P2 — Verification test: intermediate commit is gone
+# ---------------------------------------------------------------------------
+
+def test_p2_confirmed_correction_rolls_back_candidate_on_error(db):
+    """If commit_correction raises, the change_candidate status update must NOT
+    be persisted — i.e. the candidate stays 'open'.
+
+    Before P2 this test FAILS because conn.commit() at workflow.py:67 commits
+    the candidate UPDATE before commit_correction is called.
+    After P2 (intermediate commit removed) the whole transaction rolls back and
+    the candidate remains 'open'.
+    """
+    from unittest.mock import patch
+
+    cur = db.cursor()
+    bid = _seed_bank(cur, "P2V1")
+    sid = _seed_source(cur, bid, "p2v1")
+    cid = _seed_category(cur)
+    db.commit()
+    run_id = start_run(db, sid)
+
+    r1 = _record(src_key="pub-p2v1")
+    lkey, istatus = build_identity(r1, sid)
+    prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
+
+    r2 = _record(buying=Decimal("163.00"), src_key="pub-p2v1")
+    fp2 = compute_fingerprint(r2, sid)
+    cand_obs_id = insert_observation(
+        conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
+        fingerprint=fp2, logical_key=lkey, identity_status=istatus,
+        validation_status=ValidationStatus.VALIDATED, validation_messages=[],
+        fetched_at=NOW, version_number=None, is_current=False,
+        change_review_status=ChangeReviewStatus.PENDING_REVIEW,
+    )
+    cur2 = db.cursor()
+    cur2.execute(
+        "INSERT INTO change_candidate (observation_id, prior_version_id, source_id) VALUES (%s,%s,%s) RETURNING id",
+        (cand_obs_id, prior_id, sid),
+    )
+    cand_id = cur2.fetchone()[0]
+    finish_run(db, run_id, "success")
+
+    # Patch commit_correction to raise so we can test the rollback behaviour
+    # without depending on a specific DB error condition.
+    with patch("review.workflow.commit_correction", side_effect=ValueError("simulated failure")), \
+         pytest.raises(ValueError):
+        decide_candidate(
+            db, cand_id, "confirmed_correction",
+            "reviewer@example.com", "test",
+            record=r2, source_id=sid, run_id=run_id, category_id=cid,
+            fingerprint=fp2, logical_key=lkey,
+            validation_status=ValidationStatus.VALIDATED,
+            validation_messages=[], fetched_at=NOW,
+        )
+
+    # After the exception the connection may be in an aborted state.
+    # Roll back to a clean state so we can query.
+    db.rollback()
+
+    cur = db.cursor()
+    cur.execute("SELECT status FROM change_candidate WHERE id=%s", (cand_id,))
+    row = cur.fetchone()
+    # Must still be 'open' — the candidate UPDATE must not have been committed.
+    assert row[0] == "open", (
+        f"Expected 'open' but got {row[0]!r} — the intermediate commit is still present."
+    )
