@@ -7,14 +7,9 @@ from adapters.addis_fortune.adapter import AddisFortuneAdapter
 from adapters.zemen.adapter import ZemenAdapter
 
 
-def test_addis_fortune_anbesa_slug_inverts_field_mappings():
+def test_addis_fortune_anbesa_slug_retains_default_field_mappings():
     adapter = AddisFortuneAdapter("anbesa-bank-1")
-    assert adapter.FIELD_CONFIG.get("field_mappings") == {
-        "cashBuying": "transactional",
-        "cashSelling": "transactional",
-        "transBuying": "cash",
-        "transSelling": "cash",
-    }
+    assert adapter.FIELD_CONFIG == {}
 
 
 def test_addis_fortune_default_slug_retains_default_field_mappings():
@@ -30,10 +25,10 @@ def test_addis_fortune_anbesa_parse_correctly_maps_categories():
                 {
                     "currency": "USD",
                     "applicable_date": af_date_str,
-                    "cashBuying": 162.4721,
-                    "cashSelling": 165.7215,
-                    "transBuying": 163.7354,
-                    "transSelling": 167.0101,
+                    "cashBuying": 163.7354,
+                    "cashSelling": 167.0101,
+                    "transBuying": 162.4721,
+                    "transSelling": 165.7215,
                 }
             ]]
         }
