@@ -705,3 +705,53 @@ def test_gap_J_effective_date_basis_stored(db):
     row = cur.fetchone()
     assert row[0] == "collection_date_fallback"
     assert row[1] == "ambiguous"
+
+
+# ---------------------------------------------------------------------------
+# P1 — Golden tests: pin fingerprint behaviour
+# ---------------------------------------------------------------------------
+
+def test_fingerprint_golden():
+    """Pin the exact SHA-256 output for a fixed input set.
+
+    If this test breaks after P5 that is expected — update the pinned value
+    and the Decimal-trailing-zeros test below at the same time.
+    """
+    r = AdapterRecord(
+        source_currency_code="USD",
+        category="cash",
+        buying_rate=Decimal("161.00"),
+        selling_rate=Decimal("164.00"),
+        effective_date=date(2024, 1, 15),
+        effective_date_basis="source_published",
+        source_publication_key=None,
+    )
+    expected = "58257bfe678b34fd5ec6c5e7939f36d0281fa9c3233609a11b6268c143c573dd"
+    assert compute_fingerprint(r, 1, collection_date=date(2024, 1, 15)) == expected
+
+
+def test_fingerprint_decimal_trailing_zeros_differ():
+    """Document current broken behaviour: Decimal('1.5') != Decimal('1.5000') in hash.
+
+    This test MUST FAIL after P5 (which canonicalises Decimal via normalize()).
+    When P5 is implemented, delete this test and replace it with one that asserts
+    the two values produce the SAME hash.
+    """
+    r_base = AdapterRecord(
+        source_currency_code="USD",
+        category="cash",
+        buying_rate=Decimal("164.00"),
+        selling_rate=Decimal("164.00"),
+        effective_date=date(2024, 1, 15),
+        effective_date_basis="source_published",
+    )
+    from dataclasses import replace as dc_replace
+    r1 = dc_replace(r_base, buying_rate=Decimal("1.5"))
+    r2 = dc_replace(r_base, buying_rate=Decimal("1.5000"))
+    fp1 = compute_fingerprint(r1, 1, collection_date=date(2024, 1, 15))
+    fp2 = compute_fingerprint(r2, 1, collection_date=date(2024, 1, 15))
+    # Current (broken) behaviour: trailing zeros produce a different hash.
+    assert fp1 != fp2, (
+        "P5 has been applied — update this test to assert fp1 == fp2 "
+        "and pin the new golden hash in test_fingerprint_golden."
+    )

@@ -443,3 +443,88 @@ def test_inverted_category_spread_flagged_suspicious(db):
 
     res = ingest(db, [rec_cash, rec_txn], src_id, run_id)
     assert res.suspicious is True
+
+
+# ---------------------------------------------------------------------------
+# P1 — Scheduler characterization tests
+# ---------------------------------------------------------------------------
+
+from scheduler.runner import Scheduler
+from infrastructure.circuit_breaker import CircuitBreaker
+
+
+def _make_scheduler_source(conn, code):
+    """Seed a bank + source and return source_id."""
+    bank_id = _make_bank(conn, code)
+    src_id = _make_source(conn, bank_id, code.lower())
+    conn.commit()
+    return src_id
+
+
+def test_scheduler_run_source_fallback_on_zero_records(db):
+    """When the primary adapter returns 0 records, Scheduler calls _try_af_fallback
+    and the result contains fallback='addis_fortune'."""
+    src_id = _make_scheduler_source(db, "SCH1")
+
+    mock_adapter = MagicMock()
+    mock_adapter.parse.return_value = []
+
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+
+    af_result = {
+        "source_id": src_id,
+        "status": "success",
+        "accepted": 1,
+        "flagged": 0,
+        "rejected": 0,
+        "duplicates": 0,
+        "fallback": "addis_fortune",
+    }
+
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._fetch", return_value=("<html>", 200)), \
+         patch("scheduler.runner._check_schema", return_value=False), \
+         patch("scheduler.runner._try_af_fallback", return_value=af_result) as mock_fallback, \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
+        result = scheduler.run_source(db, src_id)
+
+    mock_fallback.assert_called_once()
+    assert result.get("fallback") == "addis_fortune"
+
+
+def test_scheduler_run_source_skipped_when_circuit_open(db):
+    """When circuit_breaker.should_attempt returns False and no AF fallback exists,
+    Scheduler.run_source returns status='skipped'."""
+    src_id = _make_scheduler_source(db, "SCH2")
+
+    mock_cb = MagicMock(spec=CircuitBreaker)
+    mock_cb.should_attempt.return_value = False
+
+    scheduler = Scheduler(circuit_breaker=mock_cb)
+
+    with patch("scheduler.runner._try_af_fallback", return_value=None):
+        result = scheduler.run_source(db, src_id)
+
+    assert result["status"] == "skipped"
+    assert result.get("detail") == "circuit breaker open"
+
+
+def test_scheduler_run_source_records_failure_on_http_error(db):
+    """When the HTTP fetch raises, Scheduler calls circuit_breaker.record_failure."""
+    src_id = _make_scheduler_source(db, "SCH3")
+
+    mock_cb = MagicMock(spec=CircuitBreaker)
+    mock_cb.should_attempt.return_value = True
+
+    mock_registry = MagicMock()
+    mock_registry.get.side_effect = RuntimeError("HTTP fetch failed: connection refused")
+
+    scheduler = Scheduler(adapter_registry=mock_registry, circuit_breaker=mock_cb)
+
+    with patch("scheduler.runner._try_af_fallback", return_value=None):
+        result = scheduler.run_source(db, src_id)
+
+    mock_cb.record_failure.assert_called_once()
+    assert result["status"] == "failed"
