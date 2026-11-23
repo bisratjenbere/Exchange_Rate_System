@@ -528,3 +528,68 @@ def test_scheduler_run_source_records_failure_on_http_error(db):
 
     mock_cb.record_failure.assert_called_once()
     assert result["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# P3 — Savepoint verification: UPDATE is_current=FALSE rolls back on error
+# ---------------------------------------------------------------------------
+
+def test_p3_savepoint_rolls_back_update_on_insert_failure(db):
+    """Guard the savepoint guarantee in the 'changed' path.
+
+    Sequence:
+      1. Seed a current observation (is_current=TRUE) for a logical key.
+      2. Call ingest() with a changed record for the same key using a
+         nonexistent run_id — the FK violation inside insert_observation
+         raises, triggering ROLLBACK TO SAVEPOINT _ingest_sp.
+      3. Assert the original row still has is_current=TRUE, proving the
+         UPDATE rate_observation SET is_current=FALSE at ingest.py:168
+         was rolled back together with the failed INSERT.
+
+    If this test breaks after a future refactor it means the savepoint
+    guarantee has been lost and both writes are no longer atomic.
+    """
+    bank_id = _make_bank(db, "SP1")
+    src_id = _make_source(db, bank_id, "sp1")
+    good_run_id = _make_run(db, src_id)
+
+    # Seed a current observation with a small buying rate.
+    rec1 = _record(currency="USD", buying="165.00", selling="167.00")
+    result1 = ingest(db, [rec1], src_id, good_run_id)
+    db.commit()
+    _finish_run(db, good_run_id)
+    assert result1.accepted == 1
+
+    # Fetch the seeded row id so we can check is_current after the failure.
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM rate_observation WHERE source_id=%s AND is_current=TRUE",
+            (src_id,),
+        )
+        original_id = cur.fetchone()[0]
+
+    # A changed record: same logical key (same source_record_key), different rate.
+    # 1% change — well under MAX_INTRADAY_JUMP_PERCENT so it takes the normal
+    # changed path (UPDATE existing + INSERT new), not the anomaly/candidate path.
+    rec2 = _record(currency="USD", buying="166.65", selling="168.67")
+
+    # Use a run_id that does not exist — insert_observation will raise a
+    # ForeignKeyViolation when it tries to INSERT with collection_run_id=bad_run_id.
+    bad_run_id = 999999999
+    result2 = ingest(db, [rec2], src_id, bad_run_id)
+
+    # ingest() catches the exception, rolls back the savepoint, and counts it
+    # as a rejected record — confirm the error was recorded.
+    assert result2.rejected == 1
+    assert len(result2.errors) == 1
+
+    # The critical assertion: the original row must still be current because
+    # ROLLBACK TO SAVEPOINT undid the UPDATE is_current=FALSE.
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT is_current FROM rate_observation WHERE id=%s",
+            (original_id,),
+        )
+        assert cur.fetchone()[0] is True, (
+            "Savepoint guarantee broken: UPDATE is_current=FALSE was not rolled back."
+        )
