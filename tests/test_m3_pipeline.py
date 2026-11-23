@@ -357,7 +357,6 @@ def test_5_confirmed_correction_creates_new_version(db):
         validation_status=ValidationStatus.VALIDATED,
         validation_messages=[],
         fetched_at=NOW,
-        prior_version_number=1,
     )
     db.commit()
 
@@ -442,7 +441,6 @@ def test_12_concurrent_correction_no_competing_current(db):
         fingerprint=fp2, logical_key=lkey,
         validation_status=ValidationStatus.VALIDATED,
         validation_messages=[], fetched_at=NOW,
-        prior_version_number=1,
     )
     db.commit()
 
@@ -561,7 +559,6 @@ def test_gap_A_revert_goes_to_review_not_deduplicated(db):
         fingerprint=fp2, logical_key=lkey,
         validation_status=ValidationStatus.VALIDATED,
         validation_messages=[], fetched_at=NOW,
-        prior_version_number=1,
     )
     db.commit()
 

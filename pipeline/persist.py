@@ -6,6 +6,7 @@ from domain.records import AdapterRecord
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from pipeline.fingerprint import FINGERPRINT_VERSION
 from pipeline.normalize import normalize_currency_code
+from domain.exceptions import StaleObservationError
 
 def insert_observation(
     conn,
@@ -90,20 +91,20 @@ def commit_correction(
     validation_status: ValidationStatus,
     validation_messages: list,
     fetched_at: datetime,
-    prior_version_number: int,
 ) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, logical_observation_key FROM rate_observation WHERE id = %s FOR UPDATE",
+            "SELECT id, logical_observation_key, version_number FROM rate_observation WHERE id = %s FOR UPDATE",
             (prior_obs_id,),
         )
         row = cur.fetchone()
         if row is None:
-            raise ValueError(f"Prior observation {prior_obs_id} not found")
+            raise StaleObservationError(f"Prior observation {prior_obs_id} not found or already superseded")
         if row[1] != logical_key:
             raise ValueError("Logical key mismatch — cannot correct across different observations")
 
-        new_version = prior_version_number + 1
+        locked_version = row[2] if row[2] is not None else 1
+        new_version = locked_version + 1
 
         cur.execute(
             """INSERT INTO rate_observation (

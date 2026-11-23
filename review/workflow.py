@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pipeline.persist import commit_correction, get_next_version_number
+from pipeline.persist import commit_correction
+from domain.exceptions import StaleObservationError
 from domain.records import AdapterRecord
 from domain.enums import ValidationStatus
 
@@ -56,14 +57,6 @@ def decide_candidate(
         if not all([record, logical_key, fingerprint, fetched_at]):
             raise ValueError("confirmed_correction requires record, logical_key, fingerprint, fetched_at")
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT version_number FROM rate_observation WHERE id=%s",
-                (prior_version_id,),
-            )
-            row = cur.fetchone()
-            prior_version_number = row[0] if row and row[0] else 1
-
         new_id = commit_correction(
             conn=conn,
             prior_obs_id=prior_version_id,
@@ -76,7 +69,6 @@ def decide_candidate(
             validation_status=validation_status or ValidationStatus.VALIDATED,
             validation_messages=validation_messages or [],
             fetched_at=fetched_at,
-            prior_version_number=prior_version_number,
         )
         conn.commit()
         return new_id

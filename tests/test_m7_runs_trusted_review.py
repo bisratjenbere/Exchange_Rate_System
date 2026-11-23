@@ -545,3 +545,59 @@ def test_p2_confirmed_correction_rolls_back_candidate_on_error(db):
     assert row[0] == "open", (
         f"Expected 'open' but got {row[0]!r} — the intermediate commit is still present."
     )
+
+
+# ---------------------------------------------------------------------------
+# P6 — Verification test: commit_correction derives version from locked row
+# ---------------------------------------------------------------------------
+
+def test_p6_commit_correction_derives_version_from_locked_row(db):
+    """commit_correction must read version_number from the locked row, not from
+    a caller-supplied argument.
+
+    Before P6 this test FAILS because commit_correction accepts
+    prior_version_number from the caller (stale-read race).
+    After P6 the parameter is removed and the version is read inside the lock.
+    """
+    from pipeline.persist import commit_correction
+    from domain.exceptions import StaleObservationError
+
+    cur = db.cursor()
+    bid = _seed_bank(cur, "P6V1")
+    sid = _seed_source(cur, bid, "p6v1")
+    cid = _seed_category(cur)
+    db.commit()
+    run_id = start_run(db, sid)
+
+    r1 = _record(src_key="pub-p6v1")
+    lkey, istatus = build_identity(r1, sid)
+    prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
+    finish_run(db, run_id, "success")
+
+    r2 = _record(buying=Decimal("165.00"), src_key="pub-p6v1")
+    fp2 = compute_fingerprint(r2, sid)
+
+    # commit_correction must no longer accept prior_version_number
+    import inspect
+    sig = inspect.signature(commit_correction)
+    assert "prior_version_number" not in sig.parameters, (
+        "prior_version_number parameter still present — P6 not yet applied"
+    )
+
+    new_id = commit_correction(
+        conn=db,
+        prior_obs_id=prior_id,
+        record=r2,
+        source_id=sid,
+        run_id=run_id,
+        category_id=cid,
+        fingerprint=fp2,
+        logical_key=lkey,
+        validation_status=ValidationStatus.VALIDATED,
+        validation_messages=[],
+        fetched_at=NOW,
+    )
+
+    cur = db.cursor()
+    cur.execute("SELECT version_number FROM rate_observation WHERE id=%s", (new_id,))
+    assert cur.fetchone()[0] == 2
