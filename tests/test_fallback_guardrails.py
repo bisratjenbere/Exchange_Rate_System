@@ -375,12 +375,27 @@ def test_zero_records_triggers_fallback_without_unique_violation(db):
     mock_af.get_source_url.return_value = "https://addisfortune.news"
     mock_af.parse.return_value = (fallback_records, [])
 
-    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af):
-        from scheduler.runner import run_source
-        res = run_source(db, source_id)
+    from scheduler.runner import Scheduler
+    from infrastructure.adapter_registry import AdapterRegistry
+    
+    mock_registry = Mock(spec=AdapterRegistry)
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = Mock()
+    mock_response.is_success.return_value = True
+    mock_response.content = "<html></html>"
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+    
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = Mock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        res = scheduler.run_source(db, source_id)
 
     assert res["status"] in ("success", "partial_success")
     assert res["accepted"] == 1
@@ -455,12 +470,27 @@ def test_stale_feed_retained_when_no_fallback(db):
     mock_adapter = Mock()
     mock_adapter.parse.return_value = stale_records
 
-    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
-        from scheduler.runner import run_source
-        res = run_source(db, source_id)
+    from scheduler.runner import Scheduler
+    from infrastructure.adapter_registry import AdapterRegistry
+    
+    mock_registry = Mock(spec=AdapterRegistry)
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = Mock()
+    mock_response.is_success.return_value = True
+    mock_response.content = "<html></html>"
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+    
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = Mock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        res = scheduler.run_source(db, source_id)
 
     assert res["status"] == "success"
     assert res["accepted"] == 1

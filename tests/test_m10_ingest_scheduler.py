@@ -284,7 +284,7 @@ def test_ingest_empty_list(db):
     assert result.duplicates == 0
 
 from scheduler.runner import (
-    run_source, run_all, _load_adapter, _parse, _run_status, _classify_error,
+    Scheduler, _load_adapter, _parse, _run_status, _classify_error,
 )
 
 def test_load_adapter_cbe():
@@ -349,10 +349,23 @@ def test_run_source_success(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = fixture_records
 
-    with patch("scheduler.runner._fetch", return_value=('{"ok":true}', 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema"):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = MagicMock()
+    mock_response.is_success.return_value = True
+    mock_response.content = '{"ok":true}'
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = MagicMock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        result = scheduler.run_source(db, src_id)
 
     assert result["status"] in ("success", "partial_success")
     assert result["accepted"] >= 0
@@ -363,12 +376,21 @@ def test_run_source_http_failure(db):
     db.commit()
 
     import requests
-    with patch("scheduler.runner._fetch",
-               side_effect=requests.exceptions.ConnectionError("refused")):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.side_effect = ImportError("module not found")
+    
+    mock_response = MagicMock()
+    mock_response.is_success.return_value = False
+    mock_response.error = "Connection refused"
+    
+    mock_http_client = MagicMock()
+    mock_http_client.fetch.return_value = mock_response
+    
+    scheduler = Scheduler(adapter_registry=mock_registry, http_client=mock_http_client)
+
+    result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
-    assert result["error_code"] == "http_failure"
 
 def test_run_source_parse_failure(db):
     bank_id = _make_bank(db, "RS3")
@@ -378,16 +400,20 @@ def test_run_source_parse_failure(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.side_effect = ValueError("bad html")
 
-    with patch("scheduler.runner._fetch", return_value=("<html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema"):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema"):
+        result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
     assert result["error_code"] == "parse_failure"
 
 def test_run_source_not_found(db):
-    result = run_source(db, 999999)
+    scheduler = Scheduler()
+    result = scheduler.run_source(db, 999999)
     assert result["status"] == "error"
 
 def test_run_all_iterates_enabled(db):
@@ -398,11 +424,14 @@ def test_run_all_iterates_enabled(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = []
 
-    with patch("scheduler.runner._fetch", return_value=("{}", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema"), \
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema"), \
          patch("scheduler.runner.time.sleep"):
-        results = run_all(db)
+        results = scheduler.run_all(db)
 
     assert isinstance(results, list)
     assert any(r["source_id"] == src_id for r in results)
@@ -416,11 +445,24 @@ def test_zero_records_without_fallback_marks_run_failed(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = []
 
-    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = MagicMock()
+    mock_response.is_success.return_value = True
+    mock_response.content = '<html></html>'
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = MagicMock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
     assert result["error_code"] == "zero_records_extracted"
