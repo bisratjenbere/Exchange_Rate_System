@@ -112,13 +112,15 @@ class Scheduler:
             raw_content = fetch_result.raw_content
             http_status = fetch_result.http_status
             schema_changed = fetch_result.schema_changed
+            adapter = fetch_result.adapter
             # Note: fetch_result.duration_ms not used here, we use t0 for total duration
 
             # Phase 2: Decide how to handle records (zero/stale/normal)
-            all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
-            if len(records) == 0 or all_stale:
-                err_code = "zero_records_extracted" if len(records) == 0 else "stale_feed"
-                err_summary = "Primary returned 0 records; fallback invoked" if len(records) == 0 else "Primary returned stale records; fallback invoked"
+            from scheduler.extraction.decision import classify_records
+            decision = classify_records(records)
+            if decision.classification in ("zero", "stale"):
+                err_code = decision.error_code
+                err_summary = decision.error_summary
                 finish_run(
                     conn, run_id, "failed",
                     http_status=http_status,
@@ -140,7 +142,7 @@ class Scheduler:
                 if af_res is not None:
                     return af_res
 
-                if all_stale and len(records) > 0:
+                if decision.classification == "stale":
                     fetched_at = datetime.now(timezone.utc)
                     result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
                     duration_ms = int((time.monotonic() - t0) * 1000)

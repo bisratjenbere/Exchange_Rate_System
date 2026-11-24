@@ -7,10 +7,8 @@ from bs4 import BeautifulSoup
 from adapters.base import HTMLTableAdapter, ParseResult
 from field_detection.mixin import FieldStructureMixin
 from pipeline.category_normalizer import normalize_category
-
 ADAPTER_KEY = "abay_html"
 SOURCE_URL = "https://www.abaybanksc.com/"
-
 _MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
 _DATE_RE = re.compile(rf"({_MONTHS})\s+(\d{{1,2}}),?\s+(\d{{4}})", re.IGNORECASE)
 _MONTH_MAP = {
@@ -18,9 +16,7 @@ _MONTH_MAP = {
     "may": 5, "june": 6, "july": 7, "august": 8,
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
-
 class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
-
     FIELD_CONFIG = {}
     EXPECTED_CATEGORIES = ["weighted_average", "cash", "transactional"]
 
@@ -57,7 +53,6 @@ class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
         for expected in self.EXPECTED_CATEGORIES:
             if expected not in found_categories:
                 result.add_error(f"table_{expected}:missing")
-
         return result
 
     def _extract_date(self, text: str) -> Optional[date]:
@@ -73,7 +68,6 @@ class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
             except ValueError:
                 continue
         return best
-
     def _parse_table(self, table, expected_category: str, effective_date: Optional[date], date_basis: str) -> list:
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
@@ -96,14 +90,12 @@ class AbayAdapter(FieldStructureMixin, HTMLTableAdapter):
                 effective_date=effective_date,
                 effective_date_basis=date_basis
             )
-
             for rec in detected_records:
                 if rec.category == 'UNKNOWN':
                     rec.category = normalize_category(expected_category)
 
             records.extend(detected_records)
         return records
-
 def parse(raw_html: str) -> tuple:
     adapter = AbayAdapter()
     result = adapter.parse(raw_html)

@@ -30,6 +30,7 @@ class FetchResult:
     schema_changed: bool
     duration_ms: int
     adapter_key: str
+    adapter: object  # Adapter instance for schema_fingerprint calls
 
 
 def fetch_parse_and_check_schema(
@@ -139,5 +140,6 @@ def fetch_parse_and_check_schema(
         http_status=http_status,
         schema_changed=schema_changed,
         duration_ms=duration_ms,
-        adapter_key=adapter_key
+        adapter_key=adapter_key,
+        adapter=adapter
     )
