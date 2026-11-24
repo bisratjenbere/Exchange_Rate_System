@@ -14,6 +14,7 @@ from pipeline.persist import (
     insert_change_candidate,
     get_next_version_number,
 )
+from db.repositories.rate_observation_repository import RateObservationRepository
 
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
@@ -97,14 +98,9 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
             if record.effective_date is not None:
                 _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date, is_fallback=False)
             if existing_id is not None:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """UPDATE rate_observation
-                           SET is_fallback = FALSE,
-                               is_current = TRUE
-                           WHERE id = %s AND is_fallback = TRUE""",
-                        (existing_id,)
-                    )
+                # Promote fallback to non-fallback using repository
+                repo = RateObservationRepository(conn)
+                repo.promote_fallback_to_non_fallback(existing_id)
         result.duplicates += 1
         return
 
@@ -163,11 +159,9 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
                     is_current = False
 
         if is_current and existing_id is not None:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE rate_observation SET is_current = FALSE WHERE id = %s",
-                    (existing_id,)
-                )
+            # Demote existing observation using repository
+            repo = RateObservationRepository(conn)
+            repo.demote_observation(existing_id)
         elif not is_current:
             supersedes_id = None
 
@@ -235,35 +229,11 @@ def _retire_older_current(conn, source_id: int, currency_code: str, category_id)
         )
 
 def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date, is_fallback: bool = False):
+    """Retire prior fallback observations using repository pattern."""
     if effective_date is None:
         return
-    with conn.cursor() as cur:
-        if is_fallback:
-            # Fallback caller: retire only prior fallback rows with a strictly
-            # older effective_date. Same-date fallback rows (e.g. cash and
-            # transactional ingested together) are left untouched.
-            cur.execute(
-                """UPDATE rate_observation
-                   SET is_current = FALSE
-                   WHERE source_id = %s
-                     AND source_currency_code = %s
-                     AND is_current = TRUE
-                     AND is_fallback = TRUE
-                     AND (effective_date IS NULL OR effective_date < %s)""",
-                (source_id, currency_code, effective_date),
-            )
-        else:
-            # Non-fallback caller: retire fallback rows AND same-category
-            # non-fallback rows with an older effective_date.
-            cur.execute(
-                """UPDATE rate_observation
-                   SET is_current = FALSE
-                   WHERE source_id = %s
-                     AND source_currency_code = %s
-                     AND is_current = TRUE
-                     AND (is_fallback = TRUE OR (category_id IS NOT DISTINCT FROM %s AND effective_date < %s))""",
-                (source_id, currency_code, category_id, effective_date),
-            )
+    repo = RateObservationRepository(conn)
+    repo.retire_prior_fallback_observations(source_id, currency_code, category_id, effective_date, is_fallback)
 
 def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
                                    category_id, effective_date, fetched_at: datetime):
