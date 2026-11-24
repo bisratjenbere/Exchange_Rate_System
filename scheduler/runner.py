@@ -559,27 +559,7 @@ def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) ->
         return None
 
 def _expire_stale_fallback_current(conn, source_id: int):
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE rate_observation
-               SET is_current = FALSE
-               WHERE source_id = %s
-                 AND is_fallback = TRUE
-                 AND is_current = TRUE
-                 AND effective_date < CURRENT_DATE - %s""",
-            (source_id, FALLBACK_TTL_DAYS),
-        )
-        cur.execute(
-            """UPDATE rate_observation
-               SET is_current = FALSE
-               WHERE source_id = %s
-                 AND is_current = TRUE
-                 AND effective_date < CURRENT_DATE - INTERVAL '7 days'
-                 AND EXISTS (
-                     SELECT 1 FROM rate_observation
-                     WHERE source_id = %s
-                       AND is_current = TRUE
-                       AND effective_date >= CURRENT_DATE - INTERVAL '3 days'
-                 )""",
-            (source_id, source_id),
-        )
+    """Expire stale fallback current observations using repository pattern."""
+    from db.repositories.rate_observation_repository import RateObservationRepository
+    repo = RateObservationRepository(conn)
+    repo.expire_stale_fallback_current(source_id, FALLBACK_TTL_DAYS)
