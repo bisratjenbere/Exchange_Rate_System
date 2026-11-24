@@ -4,10 +4,8 @@ import time
 import traceback
 from datetime import date, datetime, timezone
 from typing import Optional
-
 import psycopg2
 import requests
-
 from pipeline.runs import (
     start_run, finish_run, recover_stuck_run, record_raw_capture, reap_stuck_runs,
 )
@@ -76,35 +74,26 @@ class Scheduler:
         self.dry_run = dry_run
 
     def run_source(self, conn, source_id: int) -> dict:
-        repo = RateSourceRepository(conn)
-        source = repo.get_by_id(source_id)
-        if source is None:
-            return {"source_id": source_id, "status": "error", "detail": "source not found"}
-
+        # Phase 0: Pre-flight checks (extracted to input_parser module)
+        from scheduler.extraction.input_parser import validate_source_and_check_circuit_breaker
+        
+        preflight = validate_source_and_check_circuit_breaker(
+            conn, source_id, self.circuit_breaker, self.config.USER_AGENT
+        )
+        
+        if not preflight.should_proceed:
+            return preflight.early_return
+        
+        # Pre-flight passed - extract values for main collection logic
+        run_id = preflight.run_id
+        source = preflight.source
         adapter_key = source["adapter_key"]
         source_url = source["source_url"]
         ssl_verify = source["ssl_verify"]
-
-        if not self.circuit_breaker.should_attempt(adapter_key):
-            af_res = _try_af_fallback(conn, source_id, adapter_key, self.config.USER_AGENT)
-            if af_res is not None:
-                return af_res
-            return {
-                "source_id": source_id,
-                "status": "skipped",
-                "detail": "circuit breaker open",
-                "adapter_key": adapter_key
-            }
-
-        recover_stuck_run(conn, source_id)
-
-        try:
-            run_id = start_run(conn, source_id)
-        except psycopg2.errors.UniqueViolation:
-            conn.rollback()
-            return {"source_id": source_id, "status": "skipped",
-                    "detail": "run already in progress"}
-
+        
+        # Create repo for schema checks and success updates
+        repo = RateSourceRepository(conn)
+        
         t0 = time.monotonic()
         raw_content: str | None = None
         http_status: int | None = None
@@ -318,8 +307,6 @@ class Scheduler:
             time.sleep(self.config.RATE_LIMIT_DELAY)
         return results
 
-
-
 def _load_adapter(adapter_key: str):
     from adapters.addis_fortune.adapter import get_adapter_for_key, AF_SLUG_MAP
     af_only_keys = {"hijra_af", "nbe_af", "anbesa_af", "oromia_af"}
@@ -383,9 +370,6 @@ def _fetch(url: str, ssl_verify: bool, post_data: dict = None,
 def _fetch_browser(adapter, source_url: str, ssl_verify: bool, user_agent: str) -> tuple:
     return adapter.fetch_raw(source_url, user_agent, ssl_verify)
 
-
-
-
 def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, repo: RateSourceRepository = None) -> bool:
     if not hasattr(adapter, "schema_fingerprint"):
         return False
@@ -406,9 +390,6 @@ def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, re
         _store_raw_capture(conn, run_id, "schema_change", raw_content)
         return True
     return False
-
-
-
 
 def _parse(adapter, raw_content: str, category: str = "UNKNOWN") -> list:
     import inspect
