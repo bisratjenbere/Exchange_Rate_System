@@ -74,131 +74,35 @@ class Scheduler:
         self.dry_run = dry_run
 
     def run_source(self, conn, source_id: int) -> dict:
-        # Phase 0: Pre-flight checks (extracted to input_parser module)
-        from scheduler.extraction.input_parser import validate_source_and_check_circuit_breaker
+        """
+        Run collection for a single rate source.
         
-        preflight = validate_source_and_check_circuit_breaker(
-            conn, source_id, self.circuit_breaker, self.config.USER_AGENT
+        This is now a thin wrapper that delegates to the orchestrator module.
+        All extraction logic has been moved to specialized modules:
+        - input_parser: Pre-flight checks
+        - fetcher: Adapter loading and HTTP fetching
+        - decision: Zero/stale classification
+        - recorder: Database writes and transactions
+        - orchestrator: Coordination of all phases
+        
+        Args:
+            conn: Database connection
+            source_id: ID of the rate source to collect
+        
+        Returns:
+            dict: Collection result with status, metrics, and metadata
+        """
+        from scheduler.extraction.orchestrator import run_source_orchestrated
+        
+        return run_source_orchestrated(
+            conn=conn,
+            source_id=source_id,
+            circuit_breaker=self.circuit_breaker,
+            adapter_registry=self.adapter_registry,
+            error_classifier=self.error_classifier,
+            user_agent=self.config.USER_AGENT,
+            dry_run=self.dry_run,
         )
-        
-        if not preflight.should_proceed:
-            return preflight.early_return
-        
-        # Pre-flight passed - extract values for main collection logic
-        run_id = preflight.run_id
-        source = preflight.source
-        adapter_key = source["adapter_key"]
-        source_url = source["source_url"]
-        ssl_verify = source["ssl_verify"]
-
-        # Create repo for schema checks and success updates
-        repo = RateSourceRepository(conn)
-
-        t0 = time.monotonic()
-        raw_content: str | None = None
-        http_status: int | None = None
-        schema_changed: bool = False
-
-        try:
-            # Phase 1: Fetch and parse (extracted to fetcher module)
-            from scheduler.extraction.fetcher import fetch_parse_and_check_schema
-
-            fetch_result = fetch_parse_and_check_schema(
-                conn, run_id, source, self.adapter_registry, repo, self.config.USER_AGENT
-            )
-
-            # Extract values for decision logic
-            records = fetch_result.records
-            raw_content = fetch_result.raw_content
-            http_status = fetch_result.http_status
-            schema_changed = fetch_result.schema_changed
-            adapter = fetch_result.adapter
-            # Note: fetch_result.duration_ms not used here, we use t0 for total duration
-
-            # Phase 2: Decide how to handle records (zero/stale/normal)
-            from scheduler.extraction.decision import classify_records
-            from scheduler.extraction.recorder import (
-                record_failed_with_fallback_attempt,
-                record_stale_retained
-            )
-            
-            decision = classify_records(records)
-            if decision.classification in ("zero", "stale"):
-                # Failed path with fallback attempt
-                result = record_failed_with_fallback_attempt(
-                    conn, run_id, source_id,
-                    error_code=decision.error_code,
-                    error_summary=decision.error_summary,
-                    http_status=http_status,
-                    records_count=len(records),
-                    t0=t0,
-                    adapter_key=adapter_key,
-                    user_agent=self.config.USER_AGENT,
-                )
-                
-                # If fallback succeeded, return early
-                if result.get("is_fallback"):
-                    return result
-                
-                # If stale, retain as standing rate (BUG #1: double finish_run)
-                if decision.classification == "stale":
-                    return record_stale_retained(
-                        conn, run_id, source_id, records, raw_content, http_status, t0
-                    )
-                
-                # Zero records, no fallback
-                return result
-
-            # Phase 3: Normal path - ingest and record
-            from scheduler.extraction.recorder import record_normal_success
-            
-            # Handle dry-run before recording
-            if self.dry_run:
-                # Need to call ingest first to get metrics
-                fetched_at = datetime.now(timezone.utc)
-                result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
-                duration_ms = int((time.monotonic() - t0) * 1000)
-                
-                conn.rollback()  # BUG #2: start_run already committed
-                return {
-                    "source_id": source_id,
-                    "status": "dry_run",
-                    "records_found": len(records),
-                    "would_accept": result.accepted,
-                    "would_reject": result.rejected,
-                    "would_flag": result.flagged,
-                    "would_duplicate": result.duplicates,
-                    "schema_changed": schema_changed,
-                    "duration_ms": duration_ms
-                }
-            
-            # Record normal success
-            recording_result = record_normal_success(
-                conn, run_id, source_id, records, raw_content, http_status,
-                adapter, schema_changed, t0, self.circuit_breaker, adapter_key
-            )
-            
-            return {
-                "source_id": source_id,
-                "status": recording_result.status,
-                "accepted": recording_result.accepted,
-                "flagged": recording_result.flagged,
-                "rejected": recording_result.rejected,
-                "duplicates": recording_result.duplicates,
-                "candidates": recording_result.candidates,
-                "schema_changed": recording_result.schema_changed,
-            }
-
-        except Exception as exc:
-            from scheduler.extraction.recorder import record_exception
-            
-            error_code, error_summary = self.error_classifier.classify(exc)
-            
-            return record_exception(
-                conn, run_id, source_id, error_code, error_summary,
-                raw_content, http_status, t0, self.circuit_breaker,
-                adapter_key, self.config.USER_AGENT
-            )
 
     def run_all(self, conn) -> list:
         reap_stuck_runs(conn, threshold_minutes=5)
