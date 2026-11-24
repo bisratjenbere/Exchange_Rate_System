@@ -164,10 +164,10 @@ def test_16_null_buying_accepted():
     status, msgs = validate(r)
     assert status == ValidationStatus.VALIDATED
 
-def test_buying_above_selling_is_warning():
+def test_buying_above_selling_is_rejected():
     r = _record(buying=Decimal("165.00"), selling=Decimal("164.00"))
     status, msgs = validate(r)
-    assert status == ValidationStatus.WARNING
+    assert status == ValidationStatus.REJECTED
     codes = {m["code"] for m in msgs}
     assert "BUYING_ABOVE_SELLING" in codes
 

@@ -51,7 +51,7 @@ def validate(record: AdapterRecord) -> tuple:
 
     fatal_codes = {"MISSING_CURRENCY", "INVALID_DATE_BASIS", "INVALID_CATEGORY",
                    "BOTH_RATES_NULL", "INVALID_RATE_ZERO", "INVALID_RATE_NEGATIVE",
-                   "INVALID_UNIT_MULTIPLIER"}
+                   "INVALID_UNIT_MULTIPLIER", "BUYING_ABOVE_SELLING"}
     codes = {m["code"] for m in messages}
 
     if codes & fatal_codes:
