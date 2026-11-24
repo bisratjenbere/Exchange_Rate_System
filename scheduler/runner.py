@@ -117,81 +117,49 @@ class Scheduler:
 
             # Phase 2: Decide how to handle records (zero/stale/normal)
             from scheduler.extraction.decision import classify_records
+            from scheduler.extraction.recorder import (
+                record_failed_with_fallback_attempt,
+                record_stale_retained
+            )
+            
             decision = classify_records(records)
             if decision.classification in ("zero", "stale"):
-                err_code = decision.error_code
-                err_summary = decision.error_summary
-                finish_run(
-                    conn, run_id, "failed",
+                # Failed path with fallback attempt
+                result = record_failed_with_fallback_attempt(
+                    conn, run_id, source_id,
+                    error_code=decision.error_code,
+                    error_summary=decision.error_summary,
                     http_status=http_status,
-                    records_found=len(records),
-                    records_accepted=0,
-                    records_flagged=0,
-                    records_duplicated=0,
-                    error_code=err_code,
-                    error_summary=err_summary,
-                    duration_ms=int((time.monotonic() - t0) * 1000),
-                    is_fallback=False,
+                    records_count=len(records),
+                    t0=t0,
+                    adapter_key=adapter_key,
+                    user_agent=self.config.USER_AGENT,
                 )
-                needs_alert = _increment_failure_counter(conn, source_id, err_code)
-                if needs_alert:
-                    _write_alert(conn, source_id, err_code, err_summary)
-                conn.commit()
-
-                af_res = _try_af_fallback(conn, source_id, adapter_key, self.config.USER_AGENT)
-                if af_res is not None:
-                    return af_res
-
+                
+                # If fallback succeeded, return early
+                if result.get("is_fallback"):
+                    return result
+                
+                # If stale, retain as standing rate (BUG #1: double finish_run)
                 if decision.classification == "stale":
-                    fetched_at = datetime.now(timezone.utc)
-                    result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
-                    duration_ms = int((time.monotonic() - t0) * 1000)
-                    finish_run(
-                        conn, run_id, "success",
-                        http_status=http_status,
-                        records_found=len(records),
-                        records_accepted=result.accepted,
-                        records_flagged=result.flagged,
-                        records_duplicated=result.duplicates,
-                        error_code="stale_feed",
-                        error_summary="Primary returned stale records; retained as standing rate",
-                        duration_ms=duration_ms,
-                        is_fallback=False,
+                    return record_stale_retained(
+                        conn, run_id, source_id, records, raw_content, http_status, t0
                     )
-                    repo.update_last_success(source_id)
-                    _reset_failure_counter(conn, source_id)
-                    conn.commit()
-                    return {
-                        "source_id": source_id,
-                        "status": "success",
-                        "accepted": result.accepted,
-                        "flagged": result.flagged,
-                        "rejected": result.rejected,
-                        "duplicates": result.duplicates,
-                    }
+                
+                # Zero records, no fallback
+                return result
 
-                return {
-                    "source_id": source_id,
-                    "status": "failed",
-                    "error_code": err_code,
-                    "detail": err_summary,
-                }
-
-            if schema_changed:
-                new_fp = adapter.schema_fingerprint(raw_content)
-                repo.update_schema_fingerprint(source_id, new_fp)
-
-            fetched_at = datetime.now(timezone.utc)
-            result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
-
-            if result.suspicious:
-                _store_raw_capture(conn, run_id, "suspicious_data", raw_content)
-
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            run_status = _run_status(result)
-
+            # Phase 3: Normal path - ingest and record
+            from scheduler.extraction.recorder import record_normal_success
+            
+            # Handle dry-run before recording
             if self.dry_run:
-                conn.rollback()
+                # Need to call ingest first to get metrics
+                fetched_at = datetime.now(timezone.utc)
+                result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                
+                conn.rollback()  # BUG #2: start_run already committed
                 return {
                     "source_id": source_id,
                     "status": "dry_run",
@@ -203,74 +171,34 @@ class Scheduler:
                     "schema_changed": schema_changed,
                     "duration_ms": duration_ms
                 }
-
-            finish_run(
-                conn, run_id, run_status,
-                http_status=http_status,
-                records_found=len(records),
-                records_accepted=result.accepted,
-                records_flagged=result.flagged,
-                records_duplicated=result.duplicates,
-                duration_ms=duration_ms,
-                is_fallback=False,
+            
+            # Record normal success
+            recording_result = record_normal_success(
+                conn, run_id, source_id, records, raw_content, http_status,
+                adapter, schema_changed, t0, self.circuit_breaker, adapter_key
             )
-
-            if run_status in ("success", "partial_success"):
-                repo.update_last_success(source_id)
-                _reset_failure_counter(conn, source_id)
-                self.circuit_breaker.record_success(adapter_key)
-                _expire_stale_fallback_current(conn, source_id)
-
-            conn.commit()
+            
             return {
                 "source_id": source_id,
-                "status": run_status,
-                "accepted": result.accepted,
-                "flagged": result.flagged,
-                "rejected": result.rejected,
-                "duplicates": result.duplicates,
-                "candidates": result.candidates,
-                "schema_changed": schema_changed,
+                "status": recording_result.status,
+                "accepted": recording_result.accepted,
+                "flagged": recording_result.flagged,
+                "rejected": recording_result.rejected,
+                "duplicates": recording_result.duplicates,
+                "candidates": recording_result.candidates,
+                "schema_changed": recording_result.schema_changed,
             }
 
         except Exception as exc:
-            duration_ms = int((time.monotonic() - t0) * 1000)
+            from scheduler.extraction.recorder import record_exception
+            
             error_code, error_summary = self.error_classifier.classify(exc)
-
-            self.circuit_breaker.record_failure(adapter_key)
-
-            if raw_content and error_code in ("parse_failure", "schema_change"):
-                try:
-                    _store_raw_capture(conn, run_id, error_code, raw_content)
-                except Exception:
-                    pass
-
-            try:
-                finish_run(
-                    conn, run_id, "failed",
-                    http_status=http_status,
-                    error_code=error_code,
-                    error_summary=error_summary[:500] if error_summary else None,
-                    duration_ms=duration_ms,
-                    is_fallback=False,
-                )
-                needs_alert = _increment_failure_counter(conn, source_id, error_code)
-                if needs_alert:
-                    _write_alert(conn, source_id, error_code, error_summary)
-                conn.commit()
-            except Exception:
-                conn.rollback()
-
-            af_result = _try_af_fallback(conn, source_id, source["adapter_key"], self.config.USER_AGENT)
-            if af_result:
-                return af_result
-
-            return {
-                "source_id": source_id,
-                "status": "failed",
-                "error_code": error_code,
-                "detail": error_summary,
-            }
+            
+            return record_exception(
+                conn, run_id, source_id, error_code, error_summary,
+                raw_content, http_status, t0, self.circuit_breaker,
+                adapter_key, self.config.USER_AGENT
+            )
 
     def run_all(self, conn) -> list:
         reap_stuck_runs(conn, threshold_minutes=5)
