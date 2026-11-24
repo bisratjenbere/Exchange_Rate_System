@@ -14,6 +14,9 @@ from pipeline.persist import (
     insert_change_candidate,
     get_next_version_number,
 )
+from db.repositories.rate_observation_repository import RateObservationRepository
+from db.repositories.change_candidate_repository import ChangeCandidateRepository
+from db.repositories.rate_category_repository import RateCategoryRepository
 
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
@@ -97,14 +100,9 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
             if record.effective_date is not None:
                 _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date, is_fallback=False)
             if existing_id is not None:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """UPDATE rate_observation
-                           SET is_fallback = FALSE,
-                               is_current = TRUE
-                           WHERE id = %s AND is_fallback = TRUE""",
-                        (existing_id,)
-                    )
+                # Promote fallback to non-fallback using repository
+                repo = RateObservationRepository(conn)
+                repo.promote_fallback_to_non_fallback(existing_id)
         result.duplicates += 1
         return
 
@@ -163,11 +161,9 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
                     is_current = False
 
         if is_current and existing_id is not None:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE rate_observation SET is_current = FALSE WHERE id = %s",
-                    (existing_id,)
-                )
+            # Demote existing observation using repository
+            repo = RateObservationRepository(conn)
+            repo.demote_observation(existing_id)
         elif not is_current:
             supersedes_id = None
 
@@ -218,112 +214,61 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         result.accepted += 1
 
 def _load_category_map(conn) -> dict:
-    with conn.cursor() as cur:
-        cur.execute("SELECT code, id FROM rate_category WHERE is_active = TRUE")
-        return {row[0]: row[1] for row in cur.fetchall()}
+    """Load mapping of category codes to IDs."""
+    repo = RateCategoryRepository(conn)
+    return repo.get_active_categories_map()
 
 def _retire_older_current(conn, source_id: int, currency_code: str, category_id):
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE rate_observation
-               SET is_current = FALSE
-               WHERE source_id = %s
-                 AND source_currency_code = %s
-                 AND category_id IS NOT DISTINCT FROM %s
-                 AND is_current = TRUE""",
-            (source_id, currency_code, category_id),
-        )
+    """Retire older current observations using repository pattern."""
+    repo = RateObservationRepository(conn)
+    repo.retire_current_observations(source_id, currency_code, category_id)
 
 def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date, is_fallback: bool = False):
+    """Retire prior fallback observations using repository pattern."""
     if effective_date is None:
         return
-    with conn.cursor() as cur:
-        if is_fallback:
-            # Fallback caller: retire only prior fallback rows with a strictly
-            # older effective_date. Same-date fallback rows (e.g. cash and
-            # transactional ingested together) are left untouched.
-            cur.execute(
-                """UPDATE rate_observation
-                   SET is_current = FALSE
-                   WHERE source_id = %s
-                     AND source_currency_code = %s
-                     AND is_current = TRUE
-                     AND is_fallback = TRUE
-                     AND (effective_date IS NULL OR effective_date < %s)""",
-                (source_id, currency_code, effective_date),
-            )
-        else:
-            # Non-fallback caller: retire fallback rows AND same-category
-            # non-fallback rows with an older effective_date.
-            cur.execute(
-                """UPDATE rate_observation
-                   SET is_current = FALSE
-                   WHERE source_id = %s
-                     AND source_currency_code = %s
-                     AND is_current = TRUE
-                     AND (is_fallback = TRUE OR (category_id IS NOT DISTINCT FROM %s AND effective_date < %s))""",
-                (source_id, currency_code, category_id, effective_date),
-            )
+    repo = RateObservationRepository(conn)
+    repo.retire_prior_fallback_observations(source_id, currency_code, category_id, effective_date, is_fallback)
 
 def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
                                    category_id, effective_date, fetched_at: datetime):
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE change_candidate cc
-               SET status = 'dismissed',
-                   decision_reason = 'superseded_by_newer_publication',
-                   decided_at = %s,
-                   decided_by = 'system'
-               FROM rate_observation ro
-               WHERE cc.observation_id = ro.id
-                 AND ro.source_id = %s
-                 AND ro.source_currency_code = %s
-                 AND ro.category_id IS NOT DISTINCT FROM %s
-                 AND cc.status = 'open'
-                 AND ro.effective_date < %s""",
-            (fetched_at, source_id, currency_code, category_id, effective_date),
-        )
+    """Dismiss change candidates superseded by newer publication using repository pattern."""
+    repo = ChangeCandidateRepository(conn)
+    repo.dismiss_superseded_by_date(
+        source_id=source_id,
+        currency_code=currency_code,
+        category_id=category_id,
+        effective_date=effective_date,
+        decided_at=fetched_at,
+        decided_by='system'
+    )
 
 def _is_same_rate(conn, obs_id: int, prior_id: int) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT
-                 (a.buying_rate IS NOT DISTINCT FROM b.buying_rate)
-                 AND (a.selling_rate IS NOT DISTINCT FROM b.selling_rate)
-               FROM rate_observation a, rate_observation b
-               WHERE a.id = %s AND b.id = %s""",
-            (obs_id, prior_id),
-        )
-        row = cur.fetchone()
-        return bool(row and row[0])
+    """Check if two observations have identical rates."""
+    repo = RateObservationRepository(conn)
+    return repo.compare_rates(obs_id, prior_id)
 
 def _get_rate_delta_percent(conn, existing_id: int, record) -> float:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT buying_rate, selling_rate FROM rate_observation WHERE id = %s",
-            (existing_id,)
-        )
-        row = cur.fetchone()
-        if not row:
-            return 0.0
-        old_buy, old_sell = row[0], row[1]
-        deltas = []
-        if old_buy is not None and record.buying_rate is not None and float(old_buy) > 0:
-            deltas.append(abs(float(record.buying_rate) - float(old_buy)) / float(old_buy) * 100.0)
-        if old_sell is not None and record.selling_rate is not None and float(old_sell) > 0:
-            deltas.append(abs(float(record.selling_rate) - float(old_sell)) / float(old_sell) * 100.0)
-        return max(deltas) if deltas else 0.0
+    """Calculate percentage change between existing observation and new record."""
+    repo = RateObservationRepository(conn)
+    row = repo.get_rates_for_comparison(existing_id)
+    if not row:
+        return 0.0
+    
+    old_buy, old_sell = row[0], row[1]
+    deltas = []
+    
+    if old_buy is not None and record.buying_rate is not None and float(old_buy) > 0:
+        deltas.append(abs(float(record.buying_rate) - float(old_buy)) / float(old_buy) * 100.0)
+    if old_sell is not None and record.selling_rate is not None and float(old_sell) > 0:
+        deltas.append(abs(float(record.selling_rate) - float(old_sell)) / float(old_sell) * 100.0)
+    
+    return max(deltas) if deltas else 0.0
 
 def _get_active_observation(conn, source_id: int, currency_code: str, category_id):
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT id, effective_date, is_fallback
-               FROM rate_observation
-               WHERE source_id = %s
-                 AND source_currency_code = %s
-                 AND category_id IS NOT DISTINCT FROM %s
-                 AND is_current = TRUE
-               LIMIT 1""",
-            (source_id, currency_code, category_id)
-        )
-        return cur.fetchone()
+    """Get active observation using repository pattern."""
+    repo = RateObservationRepository(conn)
+    obs = repo.get_active_observation(source_id, currency_code, category_id)
+    if obs:
+        return (obs['id'], obs['effective_date'], obs['is_fallback'])
+    return None

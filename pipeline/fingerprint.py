@@ -3,14 +3,11 @@ import json
 from decimal import Decimal
 from datetime import date
 from domain.records import AdapterRecord
-
 FINGERPRINT_VERSION = 3
-
 def _canonical_decimal(d) -> str | None:
     if d is None:
         return None
     return format(Decimal(d).normalize(), "f")
-
 def compute_fingerprint(record: AdapterRecord, source_id: int, collection_date: date) -> str:
     payload = {
         "v": FINGERPRINT_VERSION,

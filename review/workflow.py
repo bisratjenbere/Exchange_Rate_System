@@ -5,6 +5,9 @@ from pipeline.persist import commit_correction
 from domain.exceptions import StaleObservationError
 from domain.records import AdapterRecord
 from domain.enums import ValidationStatus
+from db.repositories.change_candidate_repository import ChangeCandidateRepository
+from db.repositories.rate_observation_repository import RateObservationRepository
+
 
 def decide_candidate(
     conn,
@@ -26,32 +29,30 @@ def decide_candidate(
     if decision not in valid_decisions:
         raise ValueError(f"Invalid decision: {decision!r}")
 
+    candidate_repo = ChangeCandidateRepository(conn)
+    observation_repo = RateObservationRepository(conn)
     now = datetime.now(timezone.utc)
 
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT observation_id, prior_version_id, source_id FROM change_candidate WHERE id=%s",
-            (candidate_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise ValueError(f"change_candidate {candidate_id} not found")
-        obs_id, prior_version_id, cand_source_id = row
+    # Get the candidate details
+    candidate = candidate_repo.get_by_id(candidate_id)
+    if not candidate:
+        raise ValueError(f"change_candidate {candidate_id} not found")
+    
+    obs_id = candidate["observation_id"]
+    prior_version_id = candidate["prior_version_id"]
+    cand_source_id = candidate["source_id"]
 
-        cur.execute(
-            """UPDATE change_candidate SET
-                   status          = %s,
-                   decision_reason = %s,
-                   decided_at      = %s,
-                   decided_by      = %s
-               WHERE id = %s""",
-            (decision, decision_reason, now, decided_by, candidate_id),
-        )
+    # Update the candidate decision
+    candidate_repo.update_status(
+        candidate_id=candidate_id,
+        status=decision,
+        decision_reason=decision_reason,
+        decided_at=now,
+        decided_by=decided_by,
+    )
 
-        cur.execute(
-            "UPDATE rate_observation SET change_review_status=%s WHERE id=%s",
-            (decision, obs_id),
-        )
+    # Update the observation's review status
+    observation_repo.update_change_review_status(obs_id, decision)
 
     if decision == "confirmed_correction":
         if not all([record, logical_key, fingerprint, fetched_at]):
