@@ -516,3 +516,18 @@ class RateObservationRepository(BaseRepository):
         }
         
         return self._execute_returning(self._INSERT_SQL, params)
+
+    def update_change_review_status(self, observation_id: int, status: str) -> None:
+        """
+        Update the change review status of an observation.
+
+        Args:
+            observation_id: ID of the observation
+            status: New review status
+        """
+        query = """
+            UPDATE rate_observation
+            SET change_review_status = %s
+            WHERE id = %s
+        """
+        self._execute(query, (status, observation_id))

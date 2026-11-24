@@ -64,7 +64,15 @@ class ChangeCandidateRepository(BaseRepository):
             FROM change_candidate
             WHERE id = %s
         """
-        return self._fetch_one(query, (candidate_id,))
+        row = self._fetch_one(query, (candidate_id,))
+        if not row:
+            return None
+        
+        columns = [
+            'id', 'observation_id', 'prior_version_id', 'source_id',
+            'detected_at', 'status', 'decision_reason', 'decided_at', 'decided_by'
+        ]
+        return self._row_to_dict(row, columns)
     
     def update_status(
         self,
@@ -169,7 +177,7 @@ class ChangeCandidateRepository(BaseRepository):
             WHERE prior_version_id = %s AND status = 'open'
         """
         result = self._fetch_one(query, (prior_version_id,))
-        return result['count'] if result else 0
+        return result[0] if result else 0
     
     def has_pending_for_logical_key(self, logical_key: str) -> bool:
         """
@@ -193,4 +201,4 @@ class ChangeCandidateRepository(BaseRepository):
             )
         """
         result = self._fetch_one(query, (logical_key,))
-        return result['exists'] if result else False
+        return result[0] if result else False
