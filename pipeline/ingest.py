@@ -15,6 +15,7 @@ from pipeline.persist import (
     get_next_version_number,
 )
 from db.repositories.rate_observation_repository import RateObservationRepository
+from db.repositories.change_candidate_repository import ChangeCandidateRepository
 
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
@@ -217,16 +218,9 @@ def _load_category_map(conn) -> dict:
         return {row[0]: row[1] for row in cur.fetchall()}
 
 def _retire_older_current(conn, source_id: int, currency_code: str, category_id):
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE rate_observation
-               SET is_current = FALSE
-               WHERE source_id = %s
-                 AND source_currency_code = %s
-                 AND category_id IS NOT DISTINCT FROM %s
-                 AND is_current = TRUE""",
-            (source_id, currency_code, category_id),
-        )
+    """Retire older current observations using repository pattern."""
+    repo = RateObservationRepository(conn)
+    repo.retire_current_observations(source_id, currency_code, category_id)
 
 def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date, is_fallback: bool = False):
     """Retire prior fallback observations using repository pattern."""
@@ -237,22 +231,16 @@ def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str
 
 def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
                                    category_id, effective_date, fetched_at: datetime):
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE change_candidate cc
-               SET status = 'dismissed',
-                   decision_reason = 'superseded_by_newer_publication',
-                   decided_at = %s,
-                   decided_by = 'system'
-               FROM rate_observation ro
-               WHERE cc.observation_id = ro.id
-                 AND ro.source_id = %s
-                 AND ro.source_currency_code = %s
-                 AND ro.category_id IS NOT DISTINCT FROM %s
-                 AND cc.status = 'open'
-                 AND ro.effective_date < %s""",
-            (fetched_at, source_id, currency_code, category_id, effective_date),
-        )
+    """Dismiss change candidates superseded by newer publication using repository pattern."""
+    repo = ChangeCandidateRepository(conn)
+    repo.dismiss_superseded_by_date(
+        source_id=source_id,
+        currency_code=currency_code,
+        category_id=category_id,
+        effective_date=effective_date,
+        decided_at=fetched_at,
+        decided_by='system'
+    )
 
 def _is_same_rate(conn, obs_id: int, prior_id: int) -> bool:
     with conn.cursor() as cur:
@@ -285,15 +273,9 @@ def _get_rate_delta_percent(conn, existing_id: int, record) -> float:
         return max(deltas) if deltas else 0.0
 
 def _get_active_observation(conn, source_id: int, currency_code: str, category_id):
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT id, effective_date, is_fallback
-               FROM rate_observation
-               WHERE source_id = %s
-                 AND source_currency_code = %s
-                 AND category_id IS NOT DISTINCT FROM %s
-                 AND is_current = TRUE
-               LIMIT 1""",
-            (source_id, currency_code, category_id)
-        )
-        return cur.fetchone()
+    """Get active observation using repository pattern."""
+    repo = RateObservationRepository(conn)
+    obs = repo.get_active_observation(source_id, currency_code, category_id)
+    if obs:
+        return (obs['id'], obs['effective_date'], obs['is_fallback'])
+    return None

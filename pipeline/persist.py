@@ -8,6 +8,7 @@ from pipeline.fingerprint import FINGERPRINT_VERSION
 from pipeline.normalize import normalize_currency_code
 from domain.exceptions import StaleObservationError
 from db.repositories.rate_observation_repository import RateObservationRepository
+from db.repositories.change_candidate_repository import ChangeCandidateRepository
 
 def insert_observation(
     conn,
@@ -51,13 +52,12 @@ def insert_observation(
     )
 
 def insert_change_candidate(conn, observation_id: int, prior_version_id: int, source_id: int):
-    with conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO change_candidate
-                   (observation_id, prior_version_id, source_id, status)
-               VALUES (%s, %s, %s, 'open')""",
-            (observation_id, prior_version_id, source_id),
-        )
+    """Insert change candidate using repository pattern.
+    
+    This is a facade over ChangeCandidateRepository.insert() for backward compatibility.
+    """
+    repo = ChangeCandidateRepository(conn)
+    return repo.insert(observation_id, prior_version_id, source_id)
 
 def commit_correction(
     conn,
