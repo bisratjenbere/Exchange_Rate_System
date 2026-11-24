@@ -90,57 +90,31 @@ class Scheduler:
         adapter_key = source["adapter_key"]
         source_url = source["source_url"]
         ssl_verify = source["ssl_verify"]
-        
+
         # Create repo for schema checks and success updates
         repo = RateSourceRepository(conn)
-        
+
         t0 = time.monotonic()
         raw_content: str | None = None
         http_status: int | None = None
+        schema_changed: bool = False
 
         try:
-            adapter = self.adapter_registry.get(adapter_key)
-            fetch_method = getattr(adapter, "FETCH_METHOD", None)
+            # Phase 1: Fetch and parse (extracted to fetcher module)
+            from scheduler.extraction.fetcher import fetch_parse_and_check_schema
 
-            timeout_config = get_timeout_config(adapter_key)
+            fetch_result = fetch_parse_and_check_schema(
+                conn, run_id, source, self.adapter_registry, repo, self.config.USER_AGENT
+            )
 
-            if fetch_method == "browser":
-                raw_content, http_status = _fetch_browser(adapter, source_url, ssl_verify, self.config.USER_AGENT)
-            elif _has_fetch_raw(adapter):
-                raw_content, http_status = _fetch_with_retry(
-                    lambda: adapter.fetch_raw(source_url, self.config.USER_AGENT, ssl_verify)
-                )
-            else:
-                needs_cloudflare_bypass = adapter_key in ["adib_api", "awash_ajax"]
+            # Extract values for decision logic
+            records = fetch_result.records
+            raw_content = fetch_result.raw_content
+            http_status = fetch_result.http_status
+            schema_changed = fetch_result.schema_changed
+            # Note: fetch_result.duration_ms not used here, we use t0 for total duration
 
-                http_client = RequestsHttpClient(
-                    connect_timeout=timeout_config["connect_timeout"],
-                    read_timeout=timeout_config["read_timeout"],
-                    max_retries=timeout_config["max_retries"],
-                    user_agent=self.config.USER_AGENT,
-                    use_cloudflare_bypass=needs_cloudflare_bypass
-                )
-
-                post_data = getattr(adapter, "FETCH_POST_DATA", None)
-                extra_headers = getattr(adapter, "FETCH_HEADERS", None)
-                response = _fetch_with_retry(
-                    lambda: http_client.fetch(
-                        _build_url(source_url, source["adapter_key"]),
-                        ssl_verify=ssl_verify,
-                        post_data=post_data,
-                        headers=extra_headers
-                    )
-                )
-                if not response.is_success():
-                    raise RuntimeError(f"HTTP fetch failed: {response.error}")
-                raw_content = response.content
-                http_status = response.status_code
-
-            schema_changed = _check_schema(conn, run_id, source, adapter, raw_content, repo)
-
-            category = source.get("default_category") or "UNKNOWN"
-            records = _parse(adapter, raw_content, category)
-
+            # Phase 2: Decide how to handle records (zero/stale/normal)
             all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
             if len(records) == 0 or all_stale:
                 err_code = "zero_records_extracted" if len(records) == 0 else "stale_feed"
