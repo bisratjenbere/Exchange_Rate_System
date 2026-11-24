@@ -11,7 +11,7 @@ import infrastructure.env
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from scheduler.runner import run_all
+from scheduler.runner import Scheduler
 from scheduler.health import quick_health_check
 from scheduler.control import CollectionControl
 
@@ -62,7 +62,7 @@ def main():
 
         log.info("health check passed - starting collection")
 
-        results = run_all(conn)
+        results = Scheduler().run_all(conn)
     finally:
         conn.close()
 

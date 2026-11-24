@@ -60,7 +60,7 @@ def test_rammis_normal_all_pass_validation():
 
 def test_rammis_normal_fingerprints_unique():
     records = rammis_parse(_load("rammis", "normal"))
-    fps = [compute_fingerprint(r, source_id=2) for r in records]
+    fps = [compute_fingerprint(r, source_id=2, collection_date=r.effective_date or date.today()) for r in records]
     assert len(fps) == len(set(fps))
 
 def test_rammis_normal_raw_excerpt_preserved():
@@ -91,7 +91,7 @@ def test_rammis_duplicate_fetch_same_fingerprints():
     records2 = rammis_parse(_load("rammis", "duplicate_fetch"))
     usd1 = [r for r in records1 if r.source_currency_code == "USD"][0]
     usd2 = [r for r in records2 if r.source_currency_code == "USD"][0]
-    assert compute_fingerprint(usd1, 2) == compute_fingerprint(usd2, 2)
+    assert compute_fingerprint(usd1, 2, collection_date=usd1.effective_date or date.today()) == compute_fingerprint(usd2, 2, collection_date=usd2.effective_date or date.today())
 
 def test_rammis_schema_fingerprint_deterministic():
     raw = _load("rammis", "normal")
@@ -168,7 +168,7 @@ def test_wegagen_normal_all_pass_validation():
 
 def test_wegagen_normal_fingerprints_unique():
     records = weg_parse(_load("wegagen", "normal"))
-    fps = [compute_fingerprint(r, source_id=3) for r in records]
+    fps = [compute_fingerprint(r, source_id=3, collection_date=r.effective_date or date.today()) for r in records]
     assert len(fps) == len(set(fps))
 
 def test_wegagen_normal_raw_excerpt_has_tra_fields():

@@ -95,7 +95,7 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
     if action == "duplicate":
         if not is_fallback:
             if record.effective_date is not None:
-                _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date)
+                _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date, is_fallback=False)
             if existing_id is not None:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -183,8 +183,8 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
             _dismiss_superseded_candidates(conn, source_id, record.source_currency_code,
                                            category_id, record.effective_date, fetched_at)
 
-    if is_current and not is_fallback and record.effective_date is not None:
-        _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date)
+    if is_current and record.effective_date is not None:
+        _retire_prior_fallback_observations(conn, source_id, record.source_currency_code, category_id, record.effective_date, is_fallback=is_fallback)
 
     obs_id = insert_observation(
         conn=conn,
@@ -234,19 +234,36 @@ def _retire_older_current(conn, source_id: int, currency_code: str, category_id)
             (source_id, currency_code, category_id),
         )
 
-def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date):
+def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date, is_fallback: bool = False):
     if effective_date is None:
         return
     with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE rate_observation
-               SET is_current = FALSE
-               WHERE source_id = %s
-                 AND source_currency_code = %s
-                 AND is_current = TRUE
-                 AND (is_fallback = TRUE OR (category_id IS NOT DISTINCT FROM %s AND effective_date < %s))""",
-            (source_id, currency_code, category_id, effective_date),
-        )
+        if is_fallback:
+            # Fallback caller: retire only prior fallback rows with a strictly
+            # older effective_date. Same-date fallback rows (e.g. cash and
+            # transactional ingested together) are left untouched.
+            cur.execute(
+                """UPDATE rate_observation
+                   SET is_current = FALSE
+                   WHERE source_id = %s
+                     AND source_currency_code = %s
+                     AND is_current = TRUE
+                     AND is_fallback = TRUE
+                     AND (effective_date IS NULL OR effective_date < %s)""",
+                (source_id, currency_code, effective_date),
+            )
+        else:
+            # Non-fallback caller: retire fallback rows AND same-category
+            # non-fallback rows with an older effective_date.
+            cur.execute(
+                """UPDATE rate_observation
+                   SET is_current = FALSE
+                   WHERE source_id = %s
+                     AND source_currency_code = %s
+                     AND is_current = TRUE
+                     AND (is_fallback = TRUE OR (category_id IS NOT DISTINCT FROM %s AND effective_date < %s))""",
+                (source_id, currency_code, category_id, effective_date),
+            )
 
 def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
                                    category_id, effective_date, fetched_at: datetime):

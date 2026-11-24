@@ -112,7 +112,7 @@ def test_normal_all_records_pass_validation():
 
 def test_normal_fingerprints_unique_per_record():
     records = parse(_load("single_date"))
-    fps = [compute_fingerprint(r, source_id=1) for r in records]
+    fps = [compute_fingerprint(r, source_id=1, collection_date=r.effective_date or date.today()) for r in records]
     assert len(fps) == len(set(fps)), "Duplicate fingerprints found"
 
 def test_normal_two_dates_produce_distinct_logical_keys():
@@ -162,8 +162,8 @@ def test_unknown_currency_not_rejected_by_adapter():
 def test_duplicate_fetch_same_fingerprints():
     records1 = parse(_load("single_date"))
     records2 = parse(_load("single_date"))
-    fps1 = sorted(compute_fingerprint(r, 1) for r in records1)
-    fps2 = sorted(compute_fingerprint(r, 1) for r in records2)
+    fps1 = sorted(compute_fingerprint(r, 1, collection_date=r.effective_date or date.today()) for r in records1)
+    fps2 = sorted(compute_fingerprint(r, 1, collection_date=r.effective_date or date.today()) for r in records2)
     assert fps1 == fps2
 
 def test_schema_fingerprint_deterministic():

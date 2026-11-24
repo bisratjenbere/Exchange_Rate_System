@@ -1,0 +1,47 @@
+# Ruff configuration for Exchange Rate System
+# Phase 0: Baseline configuration, progressively stricten in later phases
+
+line-length = 100
+
+[lint]
+# Start with essential rules, expand in Phase 2
+select = [
+    "F",    # Pyflakes (errors)
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modern Python syntax)
+]
+
+ignore = [
+    # Temporarily ignore to avoid breaking changes in Phase 0
+    "E501",  # line-too-long (many existing violations)
+]
+
+# Allow auto-fixing for safe rules
+fixable = ["I001", "UP045", "UP006", "UP017"]
+unfixable = []
+
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "F401",  # unused-import (test fixtures)
+    "F811",  # redefined-while-unused (test fixtures)
+]
+
+[lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+known-first-party = [
+    "adapters",
+    "api",
+    "db",
+    "domain",
+    "field_detection",
+    "http_clients",
+    "infrastructure",
+    "pipeline",
+    "review",
+    "scheduler",
+    "tests",
+    "trusted_view",
+]

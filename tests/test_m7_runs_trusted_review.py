@@ -77,7 +77,7 @@ def _persist(db, record, source_id, run_id, category_id,
         lkey, istatus = build_identity(record, source_id)
     elif istatus is None:
         _, istatus = build_identity(record, source_id)
-    fp = compute_fingerprint(record, source_id)
+    fp = compute_fingerprint(record, source_id, collection_date=record.effective_date or NOW.date())
     return insert_observation(
         conn=db, record=record, source_id=source_id,
         run_id=run_id, category_id=category_id,
@@ -223,7 +223,7 @@ def test_acceptance_19_trusted_view_excludes_ambiguous(db):
         buying_rate=Decimal("161.00"), selling_rate=Decimal("164.00"),
         effective_date=None, effective_date_basis="unknown",
     )
-    fp = compute_fingerprint(r_amb, sid)
+    fp = compute_fingerprint(r_amb, sid, collection_date=r_amb.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r_amb, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp, logical_key=None, identity_status=IdentityStatus.AMBIGUOUS,
@@ -245,7 +245,7 @@ def test_acceptance_19_trusted_view_excludes_rejected(db):
 
     r = _record(src_key="pub-tv2")
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp, logical_key=lkey, identity_status=istatus,
@@ -266,7 +266,7 @@ def test_acceptance_19_trusted_view_excludes_unknown_category(db):
 
     r = _record(category="UNKNOWN", src_key="pub-tv3")
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r, source_id=sid, run_id=run_id, category_id=None,
         fingerprint=fp, logical_key=lkey, identity_status=istatus,
@@ -308,7 +308,7 @@ def test_gap_C_pending_review_shows_uncertainty_warning(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-tv5a")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -334,7 +334,7 @@ def test_acceptance_21_stale_rate_shows_staleness_warning(db):
     stale_date = date(2026, 9, 30)
     r = _record(src_key="pub-tv6", eff_date=stale_date)
     lkey, istatus = build_identity(r, sid)
-    fp = compute_fingerprint(r, sid)
+    fp = compute_fingerprint(r, sid, collection_date=r.effective_date or NOW.date())
     insert_observation(
         conn=db, record=r, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp, logical_key=lkey, identity_status=istatus,
@@ -400,7 +400,7 @@ def test_review_dismissed_candidate(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-rv1")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_obs_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -440,7 +440,7 @@ def test_review_confirmed_correction_via_workflow(db):
     prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
 
     r2 = _record(buying=Decimal("163.00"), src_key="pub-rv2")
-    fp2 = compute_fingerprint(r2, sid)
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
     cand_obs_id = insert_observation(
         conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
         fingerprint=fp2, logical_key=lkey, identity_status=istatus,
@@ -476,3 +476,128 @@ def test_review_confirmed_correction_via_workflow(db):
     assert row[0] is True
     assert row[1] == 2
     assert row[2] == prior_id
+
+
+# ---------------------------------------------------------------------------
+# P2 — Verification test: intermediate commit is gone
+# ---------------------------------------------------------------------------
+
+def test_p2_confirmed_correction_rolls_back_candidate_on_error(db):
+    """If commit_correction raises, the change_candidate status update must NOT
+    be persisted — i.e. the candidate stays 'open'.
+
+    Before P2 this test FAILS because conn.commit() at workflow.py:67 commits
+    the candidate UPDATE before commit_correction is called.
+    After P2 (intermediate commit removed) the whole transaction rolls back and
+    the candidate remains 'open'.
+    """
+    from unittest.mock import patch
+
+    cur = db.cursor()
+    bid = _seed_bank(cur, "P2V1")
+    sid = _seed_source(cur, bid, "p2v1")
+    cid = _seed_category(cur)
+    db.commit()
+    run_id = start_run(db, sid)
+
+    r1 = _record(src_key="pub-p2v1")
+    lkey, istatus = build_identity(r1, sid)
+    prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
+
+    r2 = _record(buying=Decimal("163.00"), src_key="pub-p2v1")
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
+    cand_obs_id = insert_observation(
+        conn=db, record=r2, source_id=sid, run_id=run_id, category_id=cid,
+        fingerprint=fp2, logical_key=lkey, identity_status=istatus,
+        validation_status=ValidationStatus.VALIDATED, validation_messages=[],
+        fetched_at=NOW, version_number=None, is_current=False,
+        change_review_status=ChangeReviewStatus.PENDING_REVIEW,
+    )
+    cur2 = db.cursor()
+    cur2.execute(
+        "INSERT INTO change_candidate (observation_id, prior_version_id, source_id) VALUES (%s,%s,%s) RETURNING id",
+        (cand_obs_id, prior_id, sid),
+    )
+    cand_id = cur2.fetchone()[0]
+    finish_run(db, run_id, "success")
+
+    # Patch commit_correction to raise so we can test the rollback behaviour
+    # without depending on a specific DB error condition.
+    with patch("review.workflow.commit_correction", side_effect=ValueError("simulated failure")), \
+         pytest.raises(ValueError):
+        decide_candidate(
+            db, cand_id, "confirmed_correction",
+            "reviewer@example.com", "test",
+            record=r2, source_id=sid, run_id=run_id, category_id=cid,
+            fingerprint=fp2, logical_key=lkey,
+            validation_status=ValidationStatus.VALIDATED,
+            validation_messages=[], fetched_at=NOW,
+        )
+
+    # After the exception the connection may be in an aborted state.
+    # Roll back to a clean state so we can query.
+    db.rollback()
+
+    cur = db.cursor()
+    cur.execute("SELECT status FROM change_candidate WHERE id=%s", (cand_id,))
+    row = cur.fetchone()
+    # Must still be 'open' — the candidate UPDATE must not have been committed.
+    assert row[0] == "open", (
+        f"Expected 'open' but got {row[0]!r} — the intermediate commit is still present."
+    )
+
+
+# ---------------------------------------------------------------------------
+# P6 — Verification test: commit_correction derives version from locked row
+# ---------------------------------------------------------------------------
+
+def test_p6_commit_correction_derives_version_from_locked_row(db):
+    """commit_correction must read version_number from the locked row, not from
+    a caller-supplied argument.
+
+    Before P6 this test FAILS because commit_correction accepts
+    prior_version_number from the caller (stale-read race).
+    After P6 the parameter is removed and the version is read inside the lock.
+    """
+    from pipeline.persist import commit_correction
+    from domain.exceptions import StaleObservationError
+
+    cur = db.cursor()
+    bid = _seed_bank(cur, "P6V1")
+    sid = _seed_source(cur, bid, "p6v1")
+    cid = _seed_category(cur)
+    db.commit()
+    run_id = start_run(db, sid)
+
+    r1 = _record(src_key="pub-p6v1")
+    lkey, istatus = build_identity(r1, sid)
+    prior_id = _persist(db, r1, sid, run_id, cid, lkey=lkey, istatus=istatus, version=1)
+    finish_run(db, run_id, "success")
+
+    r2 = _record(buying=Decimal("165.00"), src_key="pub-p6v1")
+    fp2 = compute_fingerprint(r2, sid, collection_date=r2.effective_date or NOW.date())
+
+    # commit_correction must no longer accept prior_version_number
+    import inspect
+    sig = inspect.signature(commit_correction)
+    assert "prior_version_number" not in sig.parameters, (
+        "prior_version_number parameter still present — P6 not yet applied"
+    )
+
+    new_id = commit_correction(
+        conn=db,
+        prior_obs_id=prior_id,
+        record=r2,
+        source_id=sid,
+        run_id=run_id,
+        category_id=cid,
+        fingerprint=fp2,
+        logical_key=lkey,
+        validation_status=ValidationStatus.VALIDATED,
+        validation_messages=[],
+        fetched_at=NOW,
+    )
+
+    cur = db.cursor()
+    cur.execute("SELECT version_number FROM rate_observation WHERE id=%s", (new_id,))
+    assert cur.fetchone()[0] == 2

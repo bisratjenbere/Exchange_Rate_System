@@ -106,8 +106,8 @@ class Scheduler:
                     "detail": "run already in progress"}
 
         t0 = time.monotonic()
-        raw_content: Optional[str] = None
-        http_status: Optional[int] = None
+        raw_content: str | None = None
+        http_status: int | None = None
 
         try:
             adapter = self.adapter_registry.get(adapter_key)
@@ -318,209 +318,7 @@ class Scheduler:
             time.sleep(self.config.RATE_LIMIT_DELAY)
         return results
 
-def run_source(conn, source_id: int) -> dict:
-    source = _load_source_old(conn, source_id)
-    if source is None:
-        return {"source_id": source_id, "status": "error", "detail": "source not found"}
 
-    adapter_key = source["adapter_key"]
-    source_url = source["source_url"]
-    ssl_verify = source["ssl_verify"]
-
-    recover_stuck_run(conn, source_id)
-
-    try:
-        run_id = start_run(conn, source_id)
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        return {"source_id": source_id, "status": "skipped",
-                "detail": "run already in progress"}
-
-    t0 = time.monotonic()
-    raw_content: Optional[str] = None
-    http_status: Optional[int] = None
-
-    try:
-        try:
-            adapter = _load_adapter(adapter_key)
-        except Exception:
-            adapter = None
-
-        fetch_method = getattr(adapter, "FETCH_METHOD", None) if adapter else None
-        config = Config()
-        if fetch_method == "browser":
-            raw_content, http_status = _fetch_browser(adapter, source_url, ssl_verify, config.USER_AGENT)
-        elif adapter and _has_fetch_raw(adapter):
-            raw_content, http_status = _fetch_with_retry(
-                lambda: adapter.fetch_raw(source_url, config.USER_AGENT, ssl_verify)
-            )
-        else:
-            post_data = getattr(adapter, "FETCH_POST_DATA", None) if adapter else None
-            extra_headers = getattr(adapter, "FETCH_HEADERS", None) if adapter else None
-            raw_content, http_status = _fetch_with_retry(
-                lambda: _fetch(
-                    _build_url(source_url, source["adapter_key"]), ssl_verify,
-                    post_data=post_data, extra_headers=extra_headers,
-                )
-            )
-
-        if adapter is None:
-            adapter = _load_adapter(adapter_key)
-
-        schema_changed = _check_schema(conn, run_id, source, adapter, raw_content, repo=None)
-
-        category = source.get("default_category") or "UNKNOWN"
-        records = _parse(adapter, raw_content, category)
-
-        all_stale = len(records) > 0 and all(r.effective_date and (date.today() - r.effective_date).days > 3 for r in records)
-        if len(records) == 0 or all_stale:
-            err_code = "zero_records_extracted" if len(records) == 0 else "stale_feed"
-            err_summary = "Primary returned 0 records; fallback invoked" if len(records) == 0 else "Primary returned stale records; fallback invoked"
-            finish_run(
-                conn, run_id, "failed",
-                http_status=http_status,
-                records_found=len(records),
-                records_accepted=0,
-                records_flagged=0,
-                records_duplicated=0,
-                error_code=err_code,
-                error_summary=err_summary,
-                duration_ms=int((time.monotonic() - t0) * 1000),
-                is_fallback=False,
-            )
-            needs_alert = _increment_failure_counter(conn, source_id, err_code)
-            if needs_alert:
-                _write_alert(conn, source_id, err_code, err_summary)
-            conn.commit()
-
-            config = Config()
-            af_result = _try_af_fallback_old(conn, source_id, adapter_key, config.USER_AGENT)
-            if af_result:
-                return af_result
-
-            if all_stale and len(records) > 0:
-                fetched_at = datetime.now(timezone.utc)
-                result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
-                duration_ms = int((time.monotonic() - t0) * 1000)
-                finish_run(
-                    conn, run_id, "success",
-                    http_status=http_status,
-                    records_found=len(records),
-                    records_accepted=result.accepted,
-                    records_flagged=result.flagged,
-                    records_duplicated=result.duplicates,
-                    error_code="stale_feed",
-                    error_summary="Primary returned stale records; retained as standing rate",
-                    duration_ms=duration_ms,
-                    is_fallback=False,
-                )
-                _update_last_success_old(conn, source_id)
-                _reset_failure_counter(conn, source_id)
-                conn.commit()
-                return {
-                    "source_id": source_id,
-                    "status": "success",
-                    "accepted": result.accepted,
-                    "flagged": result.flagged,
-                    "rejected": result.rejected,
-                    "duplicates": result.duplicates,
-                }
-
-            return {
-                "source_id": source_id,
-                "status": "failed",
-                "error_code": err_code,
-                "detail": err_summary,
-            }
-
-        if schema_changed:
-            new_fp = adapter.schema_fingerprint(raw_content)
-            _update_fingerprint_old(conn, source_id, new_fp)
-
-        fetched_at = datetime.now(timezone.utc)
-        result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=False)
-
-        if result.suspicious:
-            _store_raw_capture(conn, run_id, "suspicious_data", raw_content)
-
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        run_status = _run_status(result)
-        finish_run(
-            conn, run_id, run_status,
-            http_status=http_status,
-            records_found=len(records),
-            records_accepted=result.accepted,
-            records_flagged=result.flagged,
-            records_duplicated=result.duplicates,
-            duration_ms=duration_ms,
-            is_fallback=False,
-        )
-
-        if run_status in ("success", "partial_success"):
-            _update_last_success_old(conn, source_id)
-            _reset_failure_counter(conn, source_id)
-            _expire_stale_fallback_current(conn, source_id)
-
-        conn.commit()
-        return {
-            "source_id": source_id,
-            "status": run_status,
-            "accepted": result.accepted,
-            "flagged": result.flagged,
-            "rejected": result.rejected,
-            "duplicates": result.duplicates,
-            "candidates": result.candidates,
-            "schema_changed": schema_changed,
-        }
-
-    except Exception as exc:
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        error_code, error_summary = _classify_error(exc)
-
-        if raw_content and error_code in ("parse_failure", "schema_change"):
-            try:
-                _store_raw_capture(conn, run_id, error_code, raw_content)
-            except Exception:
-                pass
-
-        try:
-            finish_run(
-                conn, run_id, "failed",
-                http_status=http_status,
-                error_code=error_code,
-                error_summary=error_summary[:500] if error_summary else None,
-                duration_ms=duration_ms,
-                is_fallback=False,
-            )
-            needs_alert = _increment_failure_counter(conn, source_id, error_code)
-            if needs_alert:
-                _write_alert(conn, source_id, error_code, error_summary)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-
-        config = Config()
-        af_result = _try_af_fallback_old(conn, source_id, source["adapter_key"], config.USER_AGENT)
-        if af_result:
-            return af_result
-
-        return {
-            "source_id": source_id,
-            "status": "failed",
-            "error_code": error_code,
-            "detail": error_summary,
-        }
-
-def run_all(conn) -> list:
-    reap_stuck_runs(conn, threshold_minutes=5)
-    sources = _load_enabled_sources_old(conn)
-    results = []
-    config = Config()
-    for source in sources:
-        result = run_source(conn, source["id"])
-        results.append(result)
-        time.sleep(config.RATE_LIMIT_DELAY)
-    return results
 
 def _load_adapter(adapter_key: str):
     from adapters.addis_fortune.adapter import get_adapter_for_key, AF_SLUG_MAP
@@ -585,46 +383,8 @@ def _fetch(url: str, ssl_verify: bool, post_data: dict = None,
 def _fetch_browser(adapter, source_url: str, ssl_verify: bool, user_agent: str) -> tuple:
     return adapter.fetch_raw(source_url, user_agent, ssl_verify)
 
-def _load_source_old(conn, source_id: int) -> Optional[dict]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT id, adapter_key, source_url, ssl_verify, schema_fingerprint,
-                      default_category, consecutive_failures, last_failure_code
-               FROM rate_source WHERE id = %s""",
-            (source_id,),
-        )
-        row = cur.fetchone()
-    if not row:
-        return None
-    return dict(zip(["id", "adapter_key", "source_url", "ssl_verify",
-                     "schema_fingerprint", "default_category",
-                     "consecutive_failures", "last_failure_code"], row))
 
-def _load_enabled_sources_old(conn) -> list:
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT id, adapter_key, source_url, ssl_verify, schema_fingerprint,
-                      default_category, consecutive_failures, last_failure_code
-               FROM rate_source WHERE is_enabled = TRUE
-               ORDER BY id"""
-        )
-        cols = ["id", "adapter_key", "source_url", "ssl_verify",
-                "schema_fingerprint", "default_category",
-                "consecutive_failures", "last_failure_code"]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
-def _check_schema_old(conn, run_id: int, source: dict, adapter, raw_content: str) -> bool:
-    if not hasattr(adapter, "schema_fingerprint"):
-        return False
-    current_fp = adapter.schema_fingerprint(raw_content)
-    stored_fp = source.get("schema_fingerprint")
-    if not stored_fp:
-        _update_fingerprint_old(conn, source["id"], current_fp)
-        return False
-    if current_fp != stored_fp:
-        _store_raw_capture(conn, run_id, "schema_change", raw_content)
-        return True
-    return False
 
 def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, repo: RateSourceRepository = None) -> bool:
     if not hasattr(adapter, "schema_fingerprint"):
@@ -635,93 +395,20 @@ def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, re
         if repo:
             repo.update_schema_fingerprint(source["id"], current_fp)
         else:
-            _update_fingerprint_old(conn, source["id"], current_fp)
+            # Inline update when repo not provided
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE rate_source SET schema_fingerprint = %s WHERE id = %s",
+                    (str(current_fp) if current_fp is not None else None, source["id"]),
+                )
         return False
     if current_fp != stored_fp:
         _store_raw_capture(conn, run_id, "schema_change", raw_content)
         return True
     return False
 
-def _update_fingerprint_old(conn, source_id: int, fingerprint):
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE rate_source SET schema_fingerprint = %s WHERE id = %s",
-            (str(fingerprint) if fingerprint is not None else None, source_id),
-        )
 
-def _update_last_success_old(conn, source_id: int):
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE rate_source SET last_success_at = now() WHERE id = %s",
-            (source_id,),
-        )
 
-def _try_af_fallback_old(conn, source_id: int, adapter_key: str, user_agent: str) -> Optional[dict]:
-    from adapters.addis_fortune.adapter import get_adapter_for_key
-    af_adapter = get_adapter_for_key(adapter_key)
-    if af_adapter is None:
-        return None
-
-    try:
-        run_id = start_run(conn, source_id)
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        return None
-
-    t0 = time.monotonic()
-    try:
-        raw_content, http_status = af_adapter.fetch_raw(
-            af_adapter.get_source_url(), user_agent, ssl_verify=True
-        )
-        result_obj = af_adapter.parse(raw_content)
-        if isinstance(result_obj, tuple):
-            records, _ = result_obj
-        else:
-            records = result_obj.records if hasattr(result_obj, 'records') else result_obj
-
-        fetched_at = datetime.now(timezone.utc)
-        ingest_result = ingest(conn, records, source_id, run_id, fetched_at=fetched_at, is_fallback=True)
-
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        run_status = _run_status(ingest_result)
-        finish_run(
-            conn, run_id, run_status,
-            http_status=http_status,
-            records_found=len(records),
-            records_accepted=ingest_result.accepted,
-            records_flagged=ingest_result.flagged,
-            records_duplicated=ingest_result.duplicates,
-            duration_ms=duration_ms,
-            is_fallback=True,
-            fallback_adapter="addis_fortune",
-        )
-        if run_status in ("success", "partial_success"):
-            _update_last_success_old(conn, source_id)
-            _reset_failure_counter(conn, source_id)
-        conn.commit()
-        return {
-            "source_id": source_id,
-            "status": run_status,
-            "accepted": ingest_result.accepted,
-            "flagged": ingest_result.flagged,
-            "rejected": ingest_result.rejected,
-            "duplicates": ingest_result.duplicates,
-            "fallback": "addis_fortune",
-        }
-    except Exception as exc:
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        error_code, error_summary = _classify_error(exc)
-        try:
-            finish_run(conn, run_id, "failed",
-                       error_code=error_code,
-                       error_summary=error_summary[:500] if error_summary else None,
-                       duration_ms=duration_ms,
-                       is_fallback=True,
-                       fallback_adapter="addis_fortune")
-            conn.commit()
-        except Exception:
-            conn.rollback()
-        return None
 
 def _parse(adapter, raw_content: str, category: str = "UNKNOWN") -> list:
     import inspect
@@ -802,7 +489,7 @@ def _write_alert(conn, source_id: int, error_code: str, error_summary: str):
             (source_id,),
         )
 
-def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) -> Optional[dict]:
+def _try_af_fallback(conn, source_id: int, adapter_key: str, user_agent: str) -> dict | None:
     from adapters.addis_fortune.adapter import get_adapter_for_key
     af_adapter = get_adapter_for_key(adapter_key)
     if af_adapter is None:

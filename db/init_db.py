@@ -17,6 +17,8 @@ def init_db(dsn=None):
         'db/migrations/003_fallback_provenance_and_dedup_metrics.sql',
         'db/migrations/004_enforce_single_current_observation.sql',
         'db/migrations/005_consolidate_addis_bank_into_adib.sql',
+        'db/migrations/006_recompute_fingerprints.sql',
+        'db/migrations/007_add_collection_control.sql',
     ]
 
     try:

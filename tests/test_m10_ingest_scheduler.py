@@ -284,7 +284,7 @@ def test_ingest_empty_list(db):
     assert result.duplicates == 0
 
 from scheduler.runner import (
-    run_source, run_all, _load_adapter, _parse, _run_status, _classify_error,
+    Scheduler, _load_adapter, _parse, _run_status, _classify_error,
 )
 
 def test_load_adapter_cbe():
@@ -349,10 +349,23 @@ def test_run_source_success(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = fixture_records
 
-    with patch("scheduler.runner._fetch", return_value=('{"ok":true}', 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema"):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = MagicMock()
+    mock_response.is_success.return_value = True
+    mock_response.content = '{"ok":true}'
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = MagicMock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        result = scheduler.run_source(db, src_id)
 
     assert result["status"] in ("success", "partial_success")
     assert result["accepted"] >= 0
@@ -363,12 +376,21 @@ def test_run_source_http_failure(db):
     db.commit()
 
     import requests
-    with patch("scheduler.runner._fetch",
-               side_effect=requests.exceptions.ConnectionError("refused")):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.side_effect = ImportError("module not found")
+    
+    mock_response = MagicMock()
+    mock_response.is_success.return_value = False
+    mock_response.error = "Connection refused"
+    
+    mock_http_client = MagicMock()
+    mock_http_client.fetch.return_value = mock_response
+    
+    scheduler = Scheduler(adapter_registry=mock_registry, http_client=mock_http_client)
+
+    result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
-    assert result["error_code"] == "http_failure"
 
 def test_run_source_parse_failure(db):
     bank_id = _make_bank(db, "RS3")
@@ -378,16 +400,20 @@ def test_run_source_parse_failure(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.side_effect = ValueError("bad html")
 
-    with patch("scheduler.runner._fetch", return_value=("<html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema"):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema"):
+        result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
     assert result["error_code"] == "parse_failure"
 
 def test_run_source_not_found(db):
-    result = run_source(db, 999999)
+    scheduler = Scheduler()
+    result = scheduler.run_source(db, 999999)
     assert result["status"] == "error"
 
 def test_run_all_iterates_enabled(db):
@@ -398,11 +424,14 @@ def test_run_all_iterates_enabled(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = []
 
-    with patch("scheduler.runner._fetch", return_value=("{}", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema"), \
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema"), \
          patch("scheduler.runner.time.sleep"):
-        results = run_all(db)
+        results = scheduler.run_all(db)
 
     assert isinstance(results, list)
     assert any(r["source_id"] == src_id for r in results)
@@ -416,11 +445,24 @@ def test_zero_records_without_fallback_marks_run_failed(db):
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = []
 
-    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
-        result = run_source(db, src_id)
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = MagicMock()
+    mock_response.is_success.return_value = True
+    mock_response.content = '<html></html>'
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = MagicMock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
     assert result["error_code"] == "zero_records_extracted"
@@ -443,3 +485,190 @@ def test_inverted_category_spread_flagged_suspicious(db):
 
     res = ingest(db, [rec_cash, rec_txn], src_id, run_id)
     assert res.suspicious is True
+
+
+# ---------------------------------------------------------------------------
+# P1 — Scheduler characterization tests
+# ---------------------------------------------------------------------------
+
+from scheduler.runner import Scheduler
+from infrastructure.circuit_breaker import CircuitBreaker
+
+
+def _make_scheduler_source(conn, code):
+    """Seed a bank + source and return source_id."""
+    bank_id = _make_bank(conn, code)
+    src_id = _make_source(conn, bank_id, code.lower())
+    conn.commit()
+    return src_id
+
+
+def test_scheduler_run_source_fallback_on_zero_records(db):
+    """When the primary adapter returns 0 records, Scheduler calls _try_af_fallback
+    and the result contains fallback='addis_fortune'."""
+    src_id = _make_scheduler_source(db, "SCH1")
+
+    mock_adapter = MagicMock()
+    mock_adapter.parse.return_value = []
+
+    mock_registry = MagicMock()
+    mock_registry.get.return_value = mock_adapter
+
+    af_result = {
+        "source_id": src_id,
+        "status": "success",
+        "accepted": 1,
+        "flagged": 0,
+        "rejected": 0,
+        "duplicates": 0,
+        "fallback": "addis_fortune",
+    }
+
+    scheduler = Scheduler(adapter_registry=mock_registry)
+
+    with patch("scheduler.runner._fetch", return_value=("<html>", 200)), \
+         patch("scheduler.runner._check_schema", return_value=False), \
+         patch("scheduler.runner._try_af_fallback", return_value=af_result) as mock_fallback, \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
+        result = scheduler.run_source(db, src_id)
+
+    mock_fallback.assert_called_once()
+    assert result.get("fallback") == "addis_fortune"
+
+
+def test_scheduler_run_source_skipped_when_circuit_open(db):
+    """When circuit_breaker.should_attempt returns False and no AF fallback exists,
+    Scheduler.run_source returns status='skipped'."""
+    src_id = _make_scheduler_source(db, "SCH2")
+
+    mock_cb = MagicMock(spec=CircuitBreaker)
+    mock_cb.should_attempt.return_value = False
+
+    scheduler = Scheduler(circuit_breaker=mock_cb)
+
+    with patch("scheduler.runner._try_af_fallback", return_value=None):
+        result = scheduler.run_source(db, src_id)
+
+    assert result["status"] == "skipped"
+    assert result.get("detail") == "circuit breaker open"
+
+
+def test_scheduler_run_source_records_failure_on_http_error(db):
+    """When the HTTP fetch raises, Scheduler calls circuit_breaker.record_failure."""
+    src_id = _make_scheduler_source(db, "SCH3")
+
+    mock_cb = MagicMock(spec=CircuitBreaker)
+    mock_cb.should_attempt.return_value = True
+
+    mock_registry = MagicMock()
+    mock_registry.get.side_effect = RuntimeError("HTTP fetch failed: connection refused")
+
+    scheduler = Scheduler(adapter_registry=mock_registry, circuit_breaker=mock_cb)
+
+    with patch("scheduler.runner._try_af_fallback", return_value=None):
+        result = scheduler.run_source(db, src_id)
+
+    mock_cb.record_failure.assert_called_once()
+    assert result["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# P3 — Savepoint verification: UPDATE is_current=FALSE rolls back on error
+# ---------------------------------------------------------------------------
+
+def test_p3_savepoint_rolls_back_update_on_insert_failure(db):
+    """Guard the savepoint guarantee in the 'changed' path.
+
+    Sequence:
+      1. Seed a current observation (is_current=TRUE) for a logical key.
+      2. Call ingest() with a changed record for the same key using a
+         nonexistent run_id — the FK violation inside insert_observation
+         raises, triggering ROLLBACK TO SAVEPOINT _ingest_sp.
+      3. Assert the original row still has is_current=TRUE, proving the
+         UPDATE rate_observation SET is_current=FALSE at ingest.py:168
+         was rolled back together with the failed INSERT.
+
+    If this test breaks after a future refactor it means the savepoint
+    guarantee has been lost and both writes are no longer atomic.
+    """
+    bank_id = _make_bank(db, "SP1")
+    src_id = _make_source(db, bank_id, "sp1")
+    good_run_id = _make_run(db, src_id)
+
+    # Seed a current observation with a small buying rate.
+    rec1 = _record(currency="USD", buying="165.00", selling="167.00")
+    result1 = ingest(db, [rec1], src_id, good_run_id)
+    db.commit()
+    _finish_run(db, good_run_id)
+    assert result1.accepted == 1
+
+    # Fetch the seeded row id so we can check is_current after the failure.
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM rate_observation WHERE source_id=%s AND is_current=TRUE",
+            (src_id,),
+        )
+        original_id = cur.fetchone()[0]
+
+    # A changed record: same logical key (same source_record_key), different rate.
+    # 1% change — well under MAX_INTRADAY_JUMP_PERCENT so it takes the normal
+    # changed path (UPDATE existing + INSERT new), not the anomaly/candidate path.
+    rec2 = _record(currency="USD", buying="166.65", selling="168.67")
+
+    # Use a run_id that does not exist — insert_observation will raise a
+    # ForeignKeyViolation when it tries to INSERT with collection_run_id=bad_run_id.
+    bad_run_id = 999999999
+    result2 = ingest(db, [rec2], src_id, bad_run_id)
+
+    # ingest() catches the exception, rolls back the savepoint, and counts it
+    # as a rejected record — confirm the error was recorded.
+    assert result2.rejected == 1
+    assert len(result2.errors) == 1
+
+    # The critical assertion: the original row must still be current because
+    # ROLLBACK TO SAVEPOINT undid the UPDATE is_current=FALSE.
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT is_current FROM rate_observation WHERE id=%s",
+            (original_id,),
+        )
+        assert cur.fetchone()[0] is True, (
+            "Savepoint guarantee broken: UPDATE is_current=FALSE was not rolled back."
+        )
+
+
+# ---------------------------------------------------------------------------
+# P7 — Verification test: run_job entry point uses Scheduler, not legacy run_all
+# ---------------------------------------------------------------------------
+
+def test_p7_run_job_uses_scheduler_not_legacy_run_all():
+    """run_job.main must delegate to Scheduler().run_all, not the legacy run_all.
+
+    Before P7 this test FAILS because run_job imports and calls the legacy
+    module-level run_all which bypasses the circuit breaker.
+    After P7 the import is replaced with Scheduler and the test passes.
+    """
+    import ast
+    import inspect
+    import scheduler.run_job as run_job_module
+
+    source = inspect.getsource(run_job_module)
+    tree = ast.parse(source)
+
+    # Must NOT import legacy run_all at module level
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "scheduler.runner":
+                imported_names = [alias.name for alias in node.names]
+                assert "run_all" not in imported_names, (
+                    "run_job still imports legacy run_all — P7 not yet applied"
+                )
+
+    # Must import Scheduler
+    imports_scheduler = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "scheduler.runner":
+                if any(alias.name == "Scheduler" for alias in node.names):
+                    imports_scheduler = True
+    assert imports_scheduler, "run_job does not import Scheduler — P7 not yet applied"

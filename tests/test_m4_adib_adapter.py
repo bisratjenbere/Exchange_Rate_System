@@ -121,7 +121,7 @@ def test_normal_all_records_pass_validation():
 
 def test_normal_fingerprints_unique_per_currency_category():
     records = parse(_load("normal"))
-    fps = [compute_fingerprint(r, source_id=1) for r in records]
+    fps = [compute_fingerprint(r, source_id=1, collection_date=r.effective_date or date.today()) for r in records]
     assert len(fps) == len(set(fps)), "Duplicate fingerprints found"
 
 def test_empty_returns_empty_list():
@@ -154,7 +154,7 @@ def test_duplicate_fetch_same_fingerprints():
     usd1 = [r for r in records1 if r.source_currency_code == "USD" and r.category == "transactional"][0]
     usd2 = [r for r in records2 if r.source_currency_code == "USD" and r.category == "transactional"][0]
 
-    assert compute_fingerprint(usd1, 1) == compute_fingerprint(usd2, 1)
+    assert compute_fingerprint(usd1, 1, collection_date=usd1.effective_date or date.today()) == compute_fingerprint(usd2, 1, collection_date=usd2.effective_date or date.today())
 
 def test_schema_fingerprint_deterministic():
     raw = _load("normal")

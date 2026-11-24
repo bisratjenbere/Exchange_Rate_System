@@ -375,12 +375,27 @@ def test_zero_records_triggers_fallback_without_unique_violation(db):
     mock_af.get_source_url.return_value = "https://addisfortune.news"
     mock_af.parse.return_value = (fallback_records, [])
 
-    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af):
-        from scheduler.runner import run_source
-        res = run_source(db, source_id)
+    from scheduler.runner import Scheduler
+    from infrastructure.adapter_registry import AdapterRegistry
+    
+    mock_registry = Mock(spec=AdapterRegistry)
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = Mock()
+    mock_response.is_success.return_value = True
+    mock_response.content = "<html></html>"
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+    
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = Mock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        res = scheduler.run_source(db, source_id)
 
     assert res["status"] in ("success", "partial_success")
     assert res["accepted"] == 1
@@ -455,12 +470,27 @@ def test_stale_feed_retained_when_no_fallback(db):
     mock_adapter = Mock()
     mock_adapter.parse.return_value = stale_records
 
-    with patch("scheduler.runner._fetch", return_value=("<html></html>", 200)), \
-         patch("scheduler.runner._load_adapter", return_value=mock_adapter), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
-        from scheduler.runner import run_source
-        res = run_source(db, source_id)
+    from scheduler.runner import Scheduler
+    from infrastructure.adapter_registry import AdapterRegistry
+    
+    mock_registry = Mock(spec=AdapterRegistry)
+    mock_registry.get.return_value = mock_adapter
+    
+    mock_response = Mock()
+    mock_response.is_success.return_value = True
+    mock_response.content = "<html></html>"
+    mock_response.status_code = 200
+    
+    scheduler = Scheduler(adapter_registry=mock_registry)
+    
+    with patch("scheduler.runner._check_schema", return_value=False), \
+         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
+         patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
+        mock_http_instance = Mock()
+        mock_http_instance.fetch.return_value = mock_response
+        mock_http_class.return_value = mock_http_instance
+        
+        res = scheduler.run_source(db, source_id)
 
     assert res["status"] == "success"
     assert res["accepted"] == 1
@@ -472,3 +502,112 @@ def test_stale_feed_retained_when_no_fallback(db):
         assert runs[0][0] == "success"
         assert runs[0][1] == "stale_feed"
 
+
+
+# ---------------------------------------------------------------------------
+# P4 — Verification test: fallback caller must not retire non-fallback rows
+# ---------------------------------------------------------------------------
+
+def test_p4_fallback_caller_does_not_retire_non_fallback_row(db):
+    """When _retire_prior_fallback_observations is called from the fallback path
+    (is_fallback=True), it must retire only is_fallback=TRUE rows.
+    A non-fallback row with an older effective_date must be left untouched.
+
+    Setup: two current rows for the same source/currency, different categories
+    so both can be is_current=TRUE simultaneously (the unique index is per
+    source_id, source_currency_code, category_id):
+      - fallback cash row    (is_fallback=TRUE,  effective_date=Oct 20)
+      - non-fallback txn row (is_fallback=FALSE, effective_date=Oct 22)
+
+    We call _retire_prior_fallback_observations with is_fallback=True and
+    effective_date=Oct 27 (newer than both rows).
+
+    Before P4 this test FAILS: the second OR arm
+    (category_id IS NOT DISTINCT FROM %s AND effective_date < %s) has no
+    is_fallback guard, so it also retires the non-fallback txn row when
+    category_id matches (or when category_id IS NULL IS NOT DISTINCT FROM NULL).
+    After P4 the fallback caller skips the second arm entirely.
+    """
+    from pipeline.ingest import _retire_prior_fallback_observations
+    from pipeline.persist import insert_observation
+    from pipeline.fingerprint import compute_fingerprint
+    from pipeline.identity import build_identity
+    from domain.enums import ValidationStatus, IdentityStatus
+    from datetime import timezone
+
+    bank_id, source_id, _ = _create_seed_data(db)
+    run_id = start_run(db, source_id)
+
+    # Resolve category ids.
+    with db.cursor() as cur:
+        cur.execute("SELECT id FROM rate_category WHERE code='cash'")
+        cash_cat_id = cur.fetchone()[0]
+        cur.execute(
+            """INSERT INTO rate_category (code, name, approved_at)
+               VALUES ('transactional', 'Transactional', now())
+               ON CONFLICT (code) DO UPDATE SET code=EXCLUDED.code RETURNING id"""
+        )
+        txn_cat_id = cur.fetchone()[0]
+
+    fetched_at = datetime(2026, 10, 23, 8, 0, 0, tzinfo=timezone.utc)
+
+    # Seed fallback cash row (is_current=TRUE, is_fallback=TRUE).
+    fb_rec = AdapterRecord(
+        source_currency_code="USD",
+        buying_rate=Decimal("161.00"),
+        selling_rate=Decimal("164.00"),
+        category="cash",
+        effective_date=date(2026, 10, 20),
+        effective_date_basis="source_published",
+    )
+    fb_fp = compute_fingerprint(fb_rec, source_id, fetched_at.date())
+    fb_lkey, fb_istatus = build_identity(fb_rec, source_id)
+    fallback_id = insert_observation(
+        conn=db, record=fb_rec, source_id=source_id, run_id=run_id,
+        category_id=cash_cat_id, fingerprint=fb_fp, logical_key=fb_lkey,
+        identity_status=fb_istatus, validation_status=ValidationStatus.VALIDATED,
+        validation_messages=[], fetched_at=fetched_at,
+        version_number=1, is_current=True, is_fallback=True,
+    )
+
+    # Seed non-fallback transactional row (is_current=TRUE, is_fallback=FALSE).
+    # Different category_id so both rows can be current simultaneously.
+    native_rec = AdapterRecord(
+        source_currency_code="USD",
+        buying_rate=Decimal("162.00"),
+        selling_rate=Decimal("165.00"),
+        category="transactional",
+        effective_date=date(2026, 10, 22),
+        effective_date_basis="source_published",
+    )
+    native_fp = compute_fingerprint(native_rec, source_id, fetched_at.date())
+    native_lkey, native_istatus = build_identity(native_rec, source_id)
+    native_id = insert_observation(
+        conn=db, record=native_rec, source_id=source_id, run_id=run_id,
+        category_id=txn_cat_id, fingerprint=native_fp, logical_key=native_lkey,
+        identity_status=native_istatus, validation_status=ValidationStatus.VALIDATED,
+        validation_messages=[], fetched_at=fetched_at,
+        version_number=1, is_current=True, is_fallback=False,
+    )
+    finish_run(db, run_id, "success", records_found=2, records_accepted=2)
+
+    # Call with is_fallback=True and a newer effective_date.
+    # Before P4: the second OR arm retires the non-fallback txn row too
+    #            (because txn_cat_id IS NOT DISTINCT FROM txn_cat_id AND Oct22 < Oct27).
+    # After P4:  only the fallback cash row is retired (Oct20 < Oct27);
+    #            the non-fallback txn row is untouched (Option B: date guard
+    #            on fallback arm; non-fallback arm unchanged).
+    _retire_prior_fallback_observations(
+        db, source_id, "USD", txn_cat_id,
+        effective_date=date(2026, 10, 27),
+        is_fallback=True,
+    )
+
+    with db.cursor() as cur:
+        cur.execute("SELECT is_current FROM rate_observation WHERE id=%s", (fallback_id,))
+        assert cur.fetchone()[0] is False, "Fallback row should have been retired."
+
+        cur.execute("SELECT is_current FROM rate_observation WHERE id=%s", (native_id,))
+        assert cur.fetchone()[0] is True, (
+            "Non-fallback row must NOT be retired when called from the fallback path."
+        )
