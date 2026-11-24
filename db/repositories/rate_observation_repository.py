@@ -531,3 +531,41 @@ class RateObservationRepository(BaseRepository):
             WHERE id = %s
         """
         self._execute(query, (status, observation_id))
+
+    def compare_rates(self, obs_id_1: int, obs_id_2: int) -> bool:
+        """
+        Compare two observations to check if they have identical rates.
+
+        Args:
+            obs_id_1: First observation ID
+            obs_id_2: Second observation ID
+
+        Returns:
+            True if buying_rate and selling_rate are identical
+        """
+        query = """
+            SELECT
+                (a.buying_rate IS NOT DISTINCT FROM b.buying_rate)
+                AND (a.selling_rate IS NOT DISTINCT FROM b.selling_rate)
+            FROM rate_observation a, rate_observation b
+            WHERE a.id = %s AND b.id = %s
+        """
+        row = self._fetch_one(query, (obs_id_1, obs_id_2))
+        return bool(row and row[0])
+
+    def get_rates_for_comparison(self, observation_id: int) -> Optional[tuple]:
+        """
+        Get buying and selling rates for an observation.
+
+        Args:
+            observation_id: Observation ID
+
+        Returns:
+            Tuple of (buying_rate, selling_rate) or None if not found
+        """
+        query = """
+            SELECT buying_rate, selling_rate
+            FROM rate_observation
+            WHERE id = %s
+        """
+        return self._fetch_one(query, (observation_id,))

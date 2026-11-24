@@ -16,6 +16,7 @@ from pipeline.persist import (
 )
 from db.repositories.rate_observation_repository import RateObservationRepository
 from db.repositories.change_candidate_repository import ChangeCandidateRepository
+from db.repositories.rate_category_repository import RateCategoryRepository
 
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
@@ -213,9 +214,9 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         result.accepted += 1
 
 def _load_category_map(conn) -> dict:
-    with conn.cursor() as cur:
-        cur.execute("SELECT code, id FROM rate_category WHERE is_active = TRUE")
-        return {row[0]: row[1] for row in cur.fetchall()}
+    """Load mapping of category codes to IDs."""
+    repo = RateCategoryRepository(conn)
+    return repo.get_active_categories_map()
 
 def _retire_older_current(conn, source_id: int, currency_code: str, category_id):
     """Retire older current observations using repository pattern."""
@@ -243,34 +244,26 @@ def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
     )
 
 def _is_same_rate(conn, obs_id: int, prior_id: int) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT
-                 (a.buying_rate IS NOT DISTINCT FROM b.buying_rate)
-                 AND (a.selling_rate IS NOT DISTINCT FROM b.selling_rate)
-               FROM rate_observation a, rate_observation b
-               WHERE a.id = %s AND b.id = %s""",
-            (obs_id, prior_id),
-        )
-        row = cur.fetchone()
-        return bool(row and row[0])
+    """Check if two observations have identical rates."""
+    repo = RateObservationRepository(conn)
+    return repo.compare_rates(obs_id, prior_id)
 
 def _get_rate_delta_percent(conn, existing_id: int, record) -> float:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT buying_rate, selling_rate FROM rate_observation WHERE id = %s",
-            (existing_id,)
-        )
-        row = cur.fetchone()
-        if not row:
-            return 0.0
-        old_buy, old_sell = row[0], row[1]
-        deltas = []
-        if old_buy is not None and record.buying_rate is not None and float(old_buy) > 0:
-            deltas.append(abs(float(record.buying_rate) - float(old_buy)) / float(old_buy) * 100.0)
-        if old_sell is not None and record.selling_rate is not None and float(old_sell) > 0:
-            deltas.append(abs(float(record.selling_rate) - float(old_sell)) / float(old_sell) * 100.0)
-        return max(deltas) if deltas else 0.0
+    """Calculate percentage change between existing observation and new record."""
+    repo = RateObservationRepository(conn)
+    row = repo.get_rates_for_comparison(existing_id)
+    if not row:
+        return 0.0
+    
+    old_buy, old_sell = row[0], row[1]
+    deltas = []
+    
+    if old_buy is not None and record.buying_rate is not None and float(old_buy) > 0:
+        deltas.append(abs(float(record.buying_rate) - float(old_buy)) / float(old_buy) * 100.0)
+    if old_sell is not None and record.selling_rate is not None and float(old_sell) > 0:
+        deltas.append(abs(float(record.selling_rate) - float(old_sell)) / float(old_sell) * 100.0)
+    
+    return max(deltas) if deltas else 0.0
 
 def _get_active_observation(conn, source_id: int, currency_code: str, category_id):
     """Get active observation using repository pattern."""
