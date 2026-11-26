@@ -33,7 +33,6 @@ def decide_candidate(
     observation_repo = RateObservationRepository(conn)
     now = datetime.now(timezone.utc)
 
-    # Get the candidate details
     candidate = candidate_repo.get_by_id(candidate_id)
     if not candidate:
         raise ValueError(f"change_candidate {candidate_id} not found")

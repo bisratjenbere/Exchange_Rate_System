@@ -11,11 +11,9 @@ lxml==4.9.3
 
 # HTTP Requests
 requests==2.31.0
+urllib3==2.2.1
 
-# Cloudflare Bypass (for bot-protected sites)
-cloudscraper==1.2.71
-
-# Browser Automation (for JS-rendered sources & advanced Cloudflare bypass)
+# Browser Automation (optional - for JS-rendered sources)
 playwright==1.44.0
 
 # Metrics & Monitoring
@@ -24,5 +22,9 @@ prometheus-client==0.19.0
 # CLI
 click==8.1.7
 
-# Testing (optional but recommended)
+# Testing
 pytest==7.4.3
+pytest-cov==4.1.0
+ruff==0.4.4
+mypy==1.10.0
+bandit==1.7.8

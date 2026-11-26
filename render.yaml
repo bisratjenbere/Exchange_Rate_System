@@ -3,15 +3,21 @@ services:
     name: exchange-rates-api
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && (playwright install chromium --with-deps || true)
     startCommand: gunicorn -c gunicorn.conf.py api.app:app
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: PYTHON_VERSION
-        value: "3.11"
+        value: "3.12"
       - key: FLASK_ENV
         value: production
       - key: TZ
         value: Africa/Addis_Ababa
+      - key: DB_CONNECT_TIMEOUT
+        value: "30"
+      - key: DB_STATEMENT_TIMEOUT
+        value: "15000"
+      - key: ALLOWED_ORIGINS
+        value: "*"
     healthCheckPath: /health

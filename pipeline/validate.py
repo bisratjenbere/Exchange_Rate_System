@@ -4,7 +4,6 @@ from domain.enums import ValidationStatus
 
 def validate(record: AdapterRecord) -> tuple:
     messages = []
-
     if not record.source_currency_code or not record.source_currency_code.strip():
         messages.append({"code": "MISSING_CURRENCY", "message": "source_currency_code is empty"})
 

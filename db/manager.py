@@ -9,7 +9,6 @@ from psycopg2 import pool
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-
     _pool: Optional[pool.ThreadedConnectionPool] = None
     _config: Optional[dict] = None
     _initialized: bool = False

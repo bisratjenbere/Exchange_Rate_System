@@ -1,5 +1,5 @@
 from infrastructure.config import Config
-from infrastructure.adapter_registry import AdapterRegistry, default_registry
+from infrastructure.adapter_registry_v2 import AdapterRegistryV2, default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
 from infrastructure.error_classifier import (
     ErrorClassifier,
@@ -12,7 +12,7 @@ from infrastructure.error_classifier import (
 
 __all__ = [
     "Config",
-    "AdapterRegistry",
+    "AdapterRegistryV2",
     "default_registry",
     "RateSourceRepository",
     "ErrorClassifier",

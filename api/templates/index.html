@@ -31,7 +31,7 @@
     .rt-label { font-size: 0.75rem; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
     .rt-tabs { display: flex; border: 1px solid #dde1e7; border-radius: 6px; overflow: hidden; }
     .rt-tabs a { padding: 0.3rem 0.9rem; font-size: 0.8rem; font-weight: 500; text-decoration: none; color: #555; background: #fff; border-right: 1px solid #dde1e7; white-space: nowrap; }
-    .rt-tabs a:last-child { border-right: none; }
+    .rt-tabs a:last-child { border-right: 0; }
     .rt-tabs a.active { background: #0f2744; color: #fff; }
     .rt-tabs a:hover:not(.active) { background: #f5f7fa; }
     .rt-desc { font-size: 0.75rem; color: #aaa; }
@@ -50,7 +50,7 @@
     /* filter toggle */
     .filter-toggle { display: flex; border: 1px solid #dde1e7; border-radius: 6px; overflow: hidden; }
     .filter-toggle a { padding: 0.28rem 0.7rem; font-size: 0.78rem; text-decoration: none; color: #555; background: #fff; border-right: 1px solid #dde1e7; }
-    .filter-toggle a:last-child { border-right: none; }
+    .filter-toggle a:last-child { border-right: 0; }
     .filter-toggle a.active { background: #0f2744; color: #fff; }
 
     /* ── main ── */
@@ -93,7 +93,7 @@
       border-bottom: 1px solid #f2f4f7;
       transition: background 0.1s;
     }
-    .rank-item:last-child { border-bottom: none; }
+    .rank-item:last-child { border-bottom: 0; }
     .rank-item:hover { background: #fafbfc; }
     .rank-item.rank-best { background: #f0fdf4; }
     .rank-item.rank-best:hover { background: #e8faf0; }
@@ -108,7 +108,7 @@
     .rank-bank-name { font-weight: 700; font-size: 0.88rem; color: #1a1a1a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rank-bank-code { font-size: 0.7rem; color: #aaa; font-weight: 500; margin-top: 0.05rem; }
     .rank-bar-wrap { height: 4px; background: #eef0f3; border-radius: 2px; overflow: hidden; margin-top: 0.3rem; }
-    .rank-bar { height: 100%; border-radius: 2px; background: #3a7bd5; }
+    .rank-bar { height: 100%; border-radius: 2px; background: #3a7bd5; width: 0%; }
     .rank-item.rank-best .rank-bar { background: #2ecc71; }
 
     .rank-receive { text-align: right; }
@@ -149,7 +149,7 @@
     .pivot-table th.cat-header { background: #f0f4f8; color: #0f2744; font-size: 0.72rem; text-align: center; border-left: 2px solid #e2e6ea; }
     .pivot-table td { padding: 0.45rem 0.85rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
     .pivot-table td:first-child { text-align: left; font-weight: 700; color: #333; font-size: 0.88rem; }
-    .pivot-table tr:last-child td { border-bottom: none; }
+    .pivot-table tr:last-child td { border-bottom: 0; }
     .pivot-table tr:hover td { background: #fafbfc; }
     .pivot-table .na { color: #ddd; font-size: 0.75rem; }
     .pivot-table .buy { color: #0f2744; font-weight: 700; }
@@ -182,7 +182,7 @@
     .hist-table th:first-child { text-align: left; }
     .hist-table td { padding: 0.4rem 0.85rem; border-bottom: 1px solid #f5f5f5; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
     .hist-table td:first-child { text-align: left; font-weight: 600; color: #333; }
-    .hist-table tr:last-child td { border-bottom: none; }
+    .hist-table tr:last-child td { border-bottom: 0; }
     .hist-table tr:hover td { background: #fafbfc; }
     .hist-table .best-row td { background: #f0fdf4; }
     .hist-table .best-row td:first-child { color: #16a34a; font-weight: 700; }
@@ -310,9 +310,10 @@
 {% if not rows %}
   <p class="empty">No {{ rate_type }} rates for {{ currency }}. Try a different rate type.</p>
 {% else %}
-  {% set industry_avg_buy = rows[0].get('industry_avg_buying') if rows else None %}
-  {% set industry_avg_sell = rows[0].get('industry_avg_selling') if rows else None %}
-  {% set max_buying = rows | map(attribute='buying_rate') | select | max %}
+  {% set industry_avg_buy = rows[0].industry_avg_buying if rows and rows[0].industry_avg_buying is defined else None %}
+  {% set industry_avg_sell = rows[0].industry_avg_selling if rows and rows[0].industry_avg_selling is defined else None %}
+  {% set _buying_vals = rows | map(attribute='buying_rate') | select('number') | list %}
+  {% set max_buying = _buying_vals | max if _buying_vals else None %}
 
   <div class="card">
     {% if industry_avg_buy or industry_avg_sell %}
@@ -347,7 +348,7 @@
             {{ r.bank_name }}
             {% if r.staleness_warning %}<span class="badge badge-stale">STALE</span>{% endif %}
             {% if r.is_provisional %}<span class="badge badge-prov">PROVISIONAL</span>{% endif %}
-            {% if r.raw_excerpt is defined and r.raw_excerpt and r.raw_excerpt.get('fallback_source') == 'addis_fortune' %}
+            {% if r.raw_excerpt is defined and r.raw_excerpt and r.raw_excerpt.fallback_source is defined and r.raw_excerpt.fallback_source == 'addis_fortune' %}
               <span class="badge badge-af">AF</span>
             {% endif %}
           </div>
@@ -355,7 +356,7 @@
             {{ r.bank_code }} &middot; {{ r.effective_date.strftime('%d %b') if r.effective_date else '—' }}
           </div>
           <div class="rank-bar-wrap">
-            <div class="rank-bar" style="width:{{ pct }}%"></div>
+            <div class="rank-bar" data-pct="{{ pct }}"></div>
           </div>
         </div>
 
@@ -370,12 +371,12 @@
         </div>
 
         <div class="rank-spread">
-          {% if r.get('spread_pct') is not none %}{{ r.spread_pct }}%{% else %}—{% endif %}
+          {% if r.spread_pct is defined and r.spread_pct is not none %}{{ r.spread_pct }}%{% else %}—{% endif %}
           <small>spread</small>
         </div>
 
         <div class="rank-delta">
-          {% if r.get('delta_buying') is not none %}
+          {% if r.delta_buying is defined and r.delta_buying is not none %}
             {% if r.delta_buying > 0.001 %}
               <span class="delta-up">▲ {{ '%.4f'|format(r.delta_buying) }}</span>
             {% elif r.delta_buying < -0.001 %}
@@ -518,13 +519,12 @@
         <th>Currency</th>
         {% for bank in matrix.banks %}
           <th title="{{ bank }}">
-            {% set bid = matrix.get('bank_ids', {}).get(bank) if matrix.get('bank_ids') else None %}
+            {% set bid = matrix.bank_ids[bank] if matrix.bank_ids is defined and matrix.bank_ids and bank in matrix.bank_ids else None %}
+            {% set bcode = matrix.bank_codes[bank] if matrix.bank_codes is defined and matrix.bank_codes and bank in matrix.bank_codes else bank.split()[0][:6] %}
             {% if bid %}
-              <a href="/?view=bank&source_id={{ bid }}&rate_type={{ rate_type }}">
-                {{ matrix.get('bank_codes', {}).get(bank, bank.split()[0][:6]) if matrix.get('bank_codes') else bank.split()[0][:6] }}
-              </a>
+              <a href="/?view=bank&source_id={{ bid }}&rate_type={{ rate_type }}">{{ bcode }}</a>
             {% else %}
-              {{ matrix.get('bank_codes', {}).get(bank, bank.split()[0][:6]) if matrix.get('bank_codes') else bank.split()[0][:6] }}
+              {{ bcode }}
             {% endif %}
           </th>
         {% endfor %}
@@ -537,9 +537,9 @@
           <a href="/?view=compare&currency={{ cur }}&rate_type={{ rate_type }}">{{ cur }}</a>
         </td>
         {% for bank in matrix.banks %}
-          {% set cell = matrix.matrix.get(cur, {}).get(bank) %}
+          {% set cell = matrix.matrix[cur][bank] if matrix.matrix is defined and cur in matrix.matrix and bank in matrix.matrix[cur] else None %}
           {% if cell and cell.buying %}
-            {% set is_best = cell.buying == matrix.best_buying.get(cur) %}
+            {% set is_best = matrix.best_buying is defined and cell.buying == matrix.best_buying[cur] if cur in matrix.best_buying else False %}
             <td class="{{ 'best-cell' if is_best }}" title="{{ bank }}: buy {{ cell.buying }} / sell {{ cell.selling }}">
               {{ '%.4f'|format(cell.buying|float) }}
             </td>
@@ -616,5 +616,10 @@
 
 {% endif %}
 </main>
+<script>
+  document.querySelectorAll('.rank-bar[data-pct]').forEach(function(el) {
+    el.style.width = el.dataset.pct + '%';
+  });
+</script>
 </body>
 </html>

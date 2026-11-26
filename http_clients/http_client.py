@@ -6,9 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict
 from urllib.parse import urlparse
-
 import requests
-
 try:
     from http_clients.cloudflare_bypass import CloudflareBypass
     CLOUDFLARE_BYPASS_AVAILABLE = True

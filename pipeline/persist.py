@@ -52,10 +52,6 @@ def insert_observation(
     )
 
 def insert_change_candidate(conn, observation_id: int, prior_version_id: int, source_id: int):
-    """Insert change candidate using repository pattern.
-    
-    This is a facade over ChangeCandidateRepository.insert() for backward compatibility.
-    """
     repo = ChangeCandidateRepository(conn)
     return repo.insert(observation_id, prior_version_id, source_id)
 
@@ -100,13 +96,10 @@ def commit_correction(
     # Demote prior observation and promote new one
     repo.demote_observation(prior_obs_id)
     repo.promote_observation(new_id)
-    
+
     return new_id
 
 def get_next_version_number(conn, logical_key: str) -> int:
-    """Get next version number using repository pattern.
-    
-    This is a facade over RateObservationRepository.get_next_version_number() for backward compatibility.
-    """
+   
     repo = RateObservationRepository(conn)
     return repo.get_next_version_number(logical_key)
