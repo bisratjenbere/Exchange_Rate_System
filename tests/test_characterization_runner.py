@@ -98,7 +98,6 @@ def test_stale_records_retained_as_standing_rate(db):
     bank_id = _make_bank(db, "STALE1")
     src_id = _make_source(db, bank_id, "stale_test", has_fallback=False)
     
-    # Create mock adapter that returns stale records
     old_date = date.today() - timedelta(days=5)
     stale_record = AdapterRecord(
         source_currency_code="USD",
@@ -286,7 +285,6 @@ def test_schema_change_stores_raw_capture(db):
     bank_id = _make_bank(db, "SCHEMA1")
     src_id = _make_source(db, bank_id, "schema_test")
     
-    # Set initial schema fingerprint
     repo = RateSourceRepository(db)
     repo.update_schema_fingerprint(src_id, "old_fingerprint_123")
     db.commit()
@@ -353,7 +351,6 @@ def test_success_expires_stale_fallback_observations(db):
     bank_id = _make_bank(db, "EXPIRE1")
     src_id = _make_source(db, bank_id, "expire_test")
     
-    # Create an old fallback observation (>3 days old)
     old_date = date.today() - timedelta(days=5)
     with db.cursor() as cur:
         # Need a run first

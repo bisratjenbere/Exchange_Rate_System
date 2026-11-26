@@ -1,9 +1,14 @@
 import pytest
-from infrastructure.adapter_registry import AdapterRegistry, default_registry
+from infrastructure.adapter_registry_v2 import AdapterRegistryV2, default_registry
 
 class MockAdapter:
-    def parse(self, content):
-        return []
+    """Mock adapter that implements UniversalAdapter protocol."""
+    key = "mock_adapter"
+    url = "https://example.com/mock"
+    
+    def parse(self, raw: str, ctx):
+        from adapters.core.contract import ParseOutcome
+        return ParseOutcome(records=[], errors=[], warnings=[])
 
     def schema_fingerprint(self, content):
         return "mock_fingerprint"
@@ -11,7 +16,7 @@ class MockAdapter:
 class TestAdapterRegistryBasics:
 
     def test_register_and_get(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         mock_adapter = MockAdapter()
 
         registry.register("test_adapter", mock_adapter)
@@ -20,7 +25,7 @@ class TestAdapterRegistryBasics:
         assert retrieved is mock_adapter
 
     def test_register_multiple_adapters(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         mock1 = MockAdapter()
         mock2 = MockAdapter()
         mock3 = MockAdapter()
@@ -34,7 +39,7 @@ class TestAdapterRegistryBasics:
         assert registry.get("adapter3") is mock3
 
     def test_get_unregistered_adapter_raises_keyerror(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         registry.register("adapter1", MockAdapter())
 
         with pytest.raises(KeyError) as exc_info:
@@ -48,7 +53,7 @@ class TestAdapterRegistryBasics:
 class TestAdapterRegistryDuplicates:
 
     def test_duplicate_registration_raises_valueerror(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         mock1 = MockAdapter()
         mock2 = MockAdapter()
 
@@ -62,7 +67,7 @@ class TestAdapterRegistryDuplicates:
         assert "already registered" in error_msg
 
     def test_duplicate_prevents_overwrite(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         mock1 = MockAdapter()
         mock2 = MockAdapter()
 
@@ -78,11 +83,11 @@ class TestAdapterRegistryDuplicates:
 class TestAdapterRegistryKeyListing:
 
     def test_list_keys_empty_registry(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         assert registry.list_keys() == []
 
     def test_list_keys_with_adapters(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
 
         registry.register("zebra_adapter", MockAdapter())
         registry.register("alpha_adapter", MockAdapter())
@@ -92,31 +97,32 @@ class TestAdapterRegistryKeyListing:
         assert keys == ["alpha_adapter", "beta_adapter", "zebra_adapter"]
 
     def test_is_registered_returns_true_for_registered(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         registry.register("test_adapter", MockAdapter())
 
         assert registry.is_registered("test_adapter") is True
 
     def test_is_registered_returns_false_for_unregistered(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         registry.register("test_adapter", MockAdapter())
 
         assert registry.is_registered("nonexistent") is False
 
     def test_is_registered_empty_registry(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         assert registry.is_registered("anything") is False
 
 class TestDefaultRegistry:
 
     def test_default_registry_exists(self):
         assert default_registry is not None
-        assert isinstance(default_registry, AdapterRegistry)
+        assert isinstance(default_registry, AdapterRegistryV2)
 
     def test_default_registry_has_all_adapters(self):
         keys = default_registry.list_keys()
 
-        assert len(keys) == 31
+        # Registry V2 has 32 adapters (3 new + 29 legacy wrapped)
+        assert len(keys) == 32
 
     def test_default_registry_has_cbe(self):
         assert default_registry.is_registered("cbe_api")
@@ -152,7 +158,7 @@ class TestDefaultRegistry:
 class TestAdapterRegistryErrorMessages:
 
     def test_keyerror_shows_available_adapters(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
         registry.register("adapter1", MockAdapter())
         registry.register("adapter2", MockAdapter())
         registry.register("adapter3", MockAdapter())
@@ -166,7 +172,7 @@ class TestAdapterRegistryErrorMessages:
         assert "adapter3" in error_msg
 
     def test_keyerror_message_on_empty_registry(self):
-        registry = AdapterRegistry()
+        registry = AdapterRegistryV2()
 
         with pytest.raises(KeyError) as exc_info:
             registry.get("anything")

@@ -569,7 +569,6 @@ def test_insert_correction(db, repo, sample_record, test_data):
         is_current=True,
     )
     
-    # Create corrected record
     sample_record.buying_rate = Decimal("122.00")
     sample_record.selling_rate = Decimal("122.50")
     fingerprint2 = _fingerprint(sample_record)
