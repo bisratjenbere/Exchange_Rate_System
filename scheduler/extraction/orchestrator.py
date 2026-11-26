@@ -78,7 +78,6 @@ def run_source_orchestrated(
     source = preflight.source
     adapter_key = source["adapter_key"]
     
-    # Create repo for schema checks and success updates
     repo = RateSourceRepository(conn)
     
     t0 = time.monotonic()
@@ -100,6 +99,8 @@ def run_source_orchestrated(
         http_status = fetch_result.http_status
         schema_changed = fetch_result.schema_changed
         adapter = fetch_result.adapter
+        errors = fetch_result.errors        # S1: Parse errors
+        warnings = fetch_result.warnings    # S1: Parse warnings
         # Note: fetch_result.duration_ms not used here, we use t0 for total duration
         
         # Phase 2: Decide how to handle records (extracted to decision module)
@@ -164,7 +165,8 @@ def run_source_orchestrated(
         # Record normal success
         recording_result = record_normal_success(
             conn, run_id, source_id, records, raw_content, http_status,
-            adapter, schema_changed, t0, circuit_breaker, adapter_key
+            adapter, schema_changed, t0, circuit_breaker, adapter_key,
+            errors, warnings  # S1: Pass parse errors/warnings
         )
         
         return {

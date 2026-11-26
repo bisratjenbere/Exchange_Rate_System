@@ -33,6 +33,42 @@ from infrastructure.rate_source_repository import RateSourceRepository
 ALERT_AFTER_CONSECUTIVE_FAILURES = 2
 
 
+def _format_error_summary(errors: list, warnings: list, records_found: int) -> str:
+    """
+    Format parse errors and warnings into summary string.
+    
+    S1: This function surfaces parse errors that were previously discarded.
+    Format: "{error_count} errors, {warning_count} warnings; {first 3 details}"
+    
+    Returns:
+        str: Formatted summary (max 500 chars for DB column)
+    """
+    parts = []
+    
+    if errors:
+        parts.append(f"{len(errors)} parse error(s)")
+        # Add first 3 error details
+        for err in errors[:3]:
+            detail = str(err)[:100]  # Truncate long errors
+            parts.append(f"  • {detail}")
+    
+    if warnings:
+        parts.append(f"{len(warnings)} warning(s)")
+        # Add first warning as example
+        if warnings:
+            detail = str(warnings[0])[:100]
+            parts.append(f"  ⚠ {detail}")
+    
+    if not errors and not warnings:
+        return None
+    
+    summary = "; ".join(parts)
+    return summary[:500]  # DB column limit
+
+
+ALERT_AFTER_CONSECUTIVE_FAILURES = 2
+
+
 @dataclass(frozen=True)
 class IngestMetrics:
     """Metrics from pipeline.ingest() execution."""
@@ -263,9 +299,13 @@ def record_normal_success(
     t0: float,
     circuit_breaker,
     adapter_key: str,
+    errors: list = None,       # S1: Parse errors
+    warnings: list = None,     # S1: Parse warnings
 ) -> RecordingResult:
     """
     Record a normal successful collection.
+    
+    S1: Now accepts errors/warnings and surfaces them in finish_run.
     
     Handles:
     - Schema fingerprint update
@@ -296,6 +336,10 @@ def record_normal_success(
     duration_ms = int((time.monotonic() - t0) * 1000)
     run_status = _run_status(result)
     
+    errors = errors or []
+    warnings = warnings or []
+    error_summary = _format_error_summary(errors, warnings, len(records))
+    
     # Finish run
     finish_run(
         conn, run_id, run_status,
@@ -306,6 +350,7 @@ def record_normal_success(
         records_duplicated=result.duplicates,
         duration_ms=duration_ms,
         is_fallback=False,
+        error_summary=error_summary,  # S1: Surface parse errors
     )
     
     # Success bookkeeping

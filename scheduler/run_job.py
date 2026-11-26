@@ -11,7 +11,7 @@ import infrastructure.env
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from scheduler.runner import Scheduler
+from scheduler.parallel_runner import run_all_parallel
 from scheduler.health import quick_health_check
 from scheduler.control import CollectionControl
 
@@ -62,7 +62,7 @@ def main():
 
         log.info("health check passed - starting collection")
 
-        results = Scheduler().run_all(conn)
+        results = run_all_parallel(conn, max_workers=5, timeout_budget=1500.0)
     finally:
         conn.close()
 

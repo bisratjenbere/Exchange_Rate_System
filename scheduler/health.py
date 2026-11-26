@@ -2,7 +2,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from infrastructure.adapter_registry import default_registry
+from infrastructure.adapter_registry_v2 import default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
 
 def health_check(conn, detailed: bool = True) -> dict:

@@ -12,7 +12,7 @@ from pipeline.runs import (
 from pipeline.ingest import ingest
 
 from infrastructure.config import Config
-from infrastructure.adapter_registry import AdapterRegistry, default_registry
+from infrastructure.adapter_registry_v2 import AdapterRegistryV2, default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
 from infrastructure.error_classifier import ErrorClassifier, default_classifier
 from infrastructure.circuit_breaker import CircuitBreaker, get_default_circuit_breaker
@@ -56,7 +56,7 @@ class Scheduler:
         self,
         config: Config = None,
         http_client: HttpClient = None,
-        adapter_registry: AdapterRegistry = None,
+        adapter_registry: AdapterRegistryV2 = None,
         error_classifier: ErrorClassifier = None,
         circuit_breaker: CircuitBreaker = None,
         dry_run: bool = False
@@ -199,20 +199,40 @@ def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, re
         return True
     return False
 
-def _parse(adapter, raw_content: str, category: str = "UNKNOWN") -> list:
-    import inspect
-    from adapters.base import ParseResult
-    sig = inspect.signature(adapter.parse)
-    if "category" in sig.parameters:
-        result = adapter.parse(raw_content, category=category)
-    else:
-        result = adapter.parse(raw_content)
-    if isinstance(result, ParseResult):
-        return result.records
-    if isinstance(result, tuple):
-        records, _errors = result
-        return records
-    return result
+def _parse(adapter, raw_content: str, category: str = "UNKNOWN", adapter_config: dict = None) -> tuple[list, list, list]:
+    """
+    Parse raw content with adapter.
+    
+    Clean architecture - all adapters return ParseOutcome.
+    
+    Args:
+        adapter: UniversalAdapter instance
+        raw_content: Raw content to parse
+        category: Category for the data source
+        adapter_config: Additional config (e.g., {"slug": "bank-name"})
+    
+    Returns:
+        tuple: (records, errors, warnings)
+    """
+    from adapters.core.protocol import ParseContext
+    
+    # Build context with merged config
+    ctx = ParseContext(
+        source_id=0,  # Will be set by caller if needed
+        category=category,
+        url="",  # Will be set by caller if needed
+    )
+    
+    # Merge adapter_config into context if provided
+    if adapter_config:
+        for key, value in adapter_config.items():
+            setattr(ctx, key, value)
+    
+    # All clean adapters return ParseOutcome
+    outcome = adapter.parse(raw_content, ctx)
+    
+    warnings = outcome.warnings if hasattr(outcome, 'warnings') else []
+    return outcome.records, outcome.errors, warnings
 
 def _build_url(base_url: str, adapter_key: str) -> str:
     from datetime import date

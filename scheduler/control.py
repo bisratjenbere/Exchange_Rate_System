@@ -1,11 +1,9 @@
 from typing import Optional
 
 class CollectionControl:
-
     def __init__(self, conn):
         self.conn = conn
         self._ensure_table()
-
     def _ensure_table(self):
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -26,7 +24,6 @@ class CollectionControl:
             """)
 
         self.conn.commit()
-
     def is_paused(self) -> bool:
         with self.conn.cursor() as cur:
             cur.execute("""

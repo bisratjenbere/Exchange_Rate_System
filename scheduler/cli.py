@@ -10,7 +10,7 @@ import psycopg2
 from scheduler.runner import Scheduler
 from scheduler.health import health_check, format_health_report, quick_health_check
 from scheduler.control import CollectionControl
-from infrastructure.adapter_registry import default_registry
+from infrastructure.adapter_registry_v2 import default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
 from infrastructure.config import Config
 
@@ -118,22 +118,13 @@ def test_adapter(adapter_key, dry_run, show_records):
             click.echo("Parsing...")
             category = source.get("default_category", "UNKNOWN")
 
-            import inspect
-            sig = inspect.signature(adapter.parse)
-            if "category" in sig.parameters:
-                result = adapter.parse(raw_content, category=category)
-            else:
-                result = adapter.parse(raw_content)
-
-            from adapters.base import ParseResult
-            if isinstance(result, ParseResult):
-                records = result.records
-                errors = result.errors
-            elif isinstance(result, tuple):
-                records, errors = result
-            else:
-                records = result
-                errors = []
+            # All adapters now return ParseOutcome - clean architecture only
+            from adapters.core.protocol import ParseContext
+            ctx = ParseContext(source_id=0, category=category, url=source["url"])
+            outcome = adapter.parse(raw_content, ctx)
+            
+            records = outcome.records
+            errors = outcome.errors
 
             click.echo(f"✓ Parsed: {len(records)} records, {len(errors)} errors")
 
