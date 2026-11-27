@@ -31,14 +31,14 @@ class TestRateSourceRepositoryGetById:
         result = repo.get_by_id(1)
 
         assert result is not None
-        assert result["id"] == 1
-        assert result["adapter_key"] == "cbe_api"
-        assert result["source_url"] == "https://combanketh.et/api/rates"
-        assert result["ssl_verify"] is True
-        assert result["schema_fingerprint"] == "abc123fingerprint"
-        assert result["default_category"] == "FOREX"
-        assert result["consecutive_failures"] == 0
-        assert result["last_failure_code"] is None
+        assert result.id == 1
+        assert result.adapter_key == "cbe_api"
+        assert result.source_url == "https://combanketh.et/api/rates"
+        assert result.ssl_verify is True
+        assert result.schema_fingerprint == "abc123fingerprint"
+        assert result.default_category == "FOREX"
+        assert result.consecutive_failures == 0
+        assert result.last_failure_code is None
 
     def test_get_by_id_not_found_returns_none(self):
         mock_conn, mock_cursor = create_mock_conn_and_cursor()
@@ -79,11 +79,11 @@ class TestRateSourceRepositoryGetEnabledSources:
         results = repo.get_enabled_sources()
 
         assert len(results) == 3
-        assert results[0]["adapter_key"] == "cbe_api"
-        assert results[1]["adapter_key"] == "dashen_html"
-        assert results[2]["adapter_key"] == "boa_html"
-        assert results[2]["consecutive_failures"] == 2
-        assert results[2]["last_failure_code"] == "http_failure"
+        assert results[0].adapter_key == "cbe_api"
+        assert results[1].adapter_key == "dashen_html"
+        assert results[2].adapter_key == "boa_html"
+        assert results[2].consecutive_failures == 2
+        assert results[2].last_failure_code == "http_failure"
 
     def test_get_enabled_sources_empty_returns_empty_list(self):
         mock_conn, mock_cursor = create_mock_conn_and_cursor()
@@ -181,18 +181,12 @@ class TestRateSourceRepositoryDictStructure:
         result = repo.get_by_id(1)
 
         expected_keys = [
-            "id",
-            "adapter_key",
-            "source_url",
-            "ssl_verify",
-            "schema_fingerprint",
-            "default_category",
-            "consecutive_failures",
-            "last_failure_code",
+            "id", "adapter_key", "source_url", "ssl_verify",
+            "schema_fingerprint", "default_category",
+            "consecutive_failures", "last_failure_code",
         ]
-
         for key in expected_keys:
-            assert key in result, f"Missing key: {key}"
+            assert hasattr(result, key), f"Missing attribute: {key}"
 
     def test_get_enabled_sources_dicts_have_all_keys(self):
         mock_conn, mock_cursor = create_mock_conn_and_cursor()
@@ -205,15 +199,9 @@ class TestRateSourceRepositoryDictStructure:
         results = repo.get_enabled_sources()
 
         expected_keys = [
-            "id",
-            "adapter_key",
-            "source_url",
-            "ssl_verify",
-            "schema_fingerprint",
-            "default_category",
-            "consecutive_failures",
-            "last_failure_code",
+            "id", "adapter_key", "source_url", "ssl_verify",
+            "schema_fingerprint", "default_category",
+            "consecutive_failures", "last_failure_code",
         ]
-
         for key in expected_keys:
-            assert key in results[0], f"Missing key: {key}"
+            assert hasattr(results[0], key), f"Missing attribute: {key}"

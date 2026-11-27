@@ -19,14 +19,5 @@ class RateSource:
     last_success_at: Optional[datetime] = None
     adapter_config: Optional[dict] = None
 
-    def __getitem__(self, key: str):
-        return getattr(self, key)
-
-    def __contains__(self, key: object) -> bool:
-        return isinstance(key, str) and hasattr(self, key)
-
-    def get(self, key: str, default=None):
-        return getattr(self, key, default)
-
     def with_schema_fingerprint(self, fingerprint: str) -> RateSource:
         return replace(self, schema_fingerprint=fingerprint)

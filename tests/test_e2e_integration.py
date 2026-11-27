@@ -253,6 +253,7 @@ class TestPerformance:
         
         adapter = default_registry.get("cbe_api")
         source = _src(source_id=1, adapter_key="cbe_api")
+        start = time.time()
         outcome = parse_with_adapter(adapter, golden["payload"], source)
         duration = time.time() - start
         
