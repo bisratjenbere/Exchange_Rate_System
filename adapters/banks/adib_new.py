@@ -146,7 +146,7 @@ class ADIBAdapter:
             if not txn_buying or not txn_selling or txn_buying == 0 or txn_selling == 0:
                 issues.append(RowIssue(
                     row_ref,
-                    IssueCode.MISSING_RATE,
+                    IssueCode.EMPTY_RATE,
                     f"Missing or zero transactional rates for {currency}",
                     Severity.WARNING,
                 ))
@@ -158,10 +158,9 @@ class ADIBAdapter:
                 category="transactional",
                 buying_rate=txn_buying,
                 selling_rate=txn_selling,
-                effective_date=effective_date or ctx.collection_date,
-                effective_date_basis="source" if effective_date else "collection",
-                source_id=ctx.source_id,
-                collection_date=ctx.collection_date,
+                ctx=ctx,
+                effective_date=effective_date,
+                effective_date_basis="source_published" if effective_date else "collection_date_fallback",
             )
             
             records.append(record)

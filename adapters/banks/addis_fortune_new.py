@@ -170,8 +170,12 @@ class AddisFortuneAdapter:
             selling_rate = None
             category = ctx.category or "transactional"
             
-            # Try to find buying/selling rates from various field names
-            for buy_field in ["buying", "cash_buying", "buying_rate"]:
+            buy_fields = (
+                ["cashBuying", "transBuying", "buying", "cash_buying", "buying_rate"]
+                if category == "cash"
+                else ["transBuying", "cashBuying", "buying", "cash_buying", "buying_rate"]
+            )
+            for buy_field in buy_fields:
                 if buy_field in row:
                     try:
                         buying_rate = parse_decimal(row[buy_field])
@@ -180,7 +184,12 @@ class AddisFortuneAdapter:
                     except (ValueError, TypeError):
                         pass
             
-            for sell_field in ["selling", "cash_selling", "selling_rate"]:
+            sell_fields = (
+                ["cashSelling", "transSelling", "selling", "cash_selling", "selling_rate"]
+                if category == "cash"
+                else ["transSelling", "cashSelling", "selling", "cash_selling", "selling_rate"]
+            )
+            for sell_field in sell_fields:
                 if sell_field in row:
                     try:
                         selling_rate = parse_decimal(row[sell_field])
@@ -193,7 +202,7 @@ class AddisFortuneAdapter:
             if not buying_rate or not selling_rate:
                 issues.append(RowIssue(
                     row_ref,
-                    IssueCode.MISSING_RATE,
+                    IssueCode.EMPTY_RATE,
                     f"{currency}: missing or invalid rates (buying={buying_rate}, selling={selling_rate})",
                     Severity.WARNING,
                 ))
@@ -207,7 +216,7 @@ class AddisFortuneAdapter:
                 selling_rate=selling_rate,
                 ctx=ctx,
                 effective_date=applicable_date or ctx.collection_date,
-                effective_date_basis="source" if applicable_date else "collection",
+                effective_date_basis="source_published" if applicable_date else "collection_date_fallback",
                 currency_name=row.get("currency_name"),
             )
             

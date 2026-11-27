@@ -95,6 +95,11 @@ def parse_with_adapter(
         )
     
     ctx = create_parse_context(source, collection_date)
+
+    if adapter_config and hasattr(adapter, "slug"):
+        adapter.slug = adapter_config.get("slug", adapter.slug)
+        if hasattr(adapter, "url"):
+            adapter.url = f"https://exchange.addisfortune.news/bank/{adapter.slug}"
     
     try:
         outcome = adapter.parse(raw_content, ctx)

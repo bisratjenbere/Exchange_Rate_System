@@ -11,7 +11,8 @@ class RateSourceRepository:
             cur.execute(
                 """SELECT id, adapter_key, source_url, ssl_verify,
                           schema_fingerprint, default_category,
-                          consecutive_failures, last_failure_code
+                          consecutive_failures, last_failure_code,
+                          adapter_config
                    FROM rate_source
                    WHERE id = %s""",
                 (source_id,)
@@ -30,6 +31,7 @@ class RateSourceRepository:
             "default_category": row[5],
             "consecutive_failures": row[6],
             "last_failure_code": row[7],
+            "adapter_config": row[8] if len(row) > 8 else None,
         }
 
     def get_enabled_sources(self) -> list[dict]:
@@ -37,7 +39,8 @@ class RateSourceRepository:
             cur.execute(
                 """SELECT id, adapter_key, source_url, ssl_verify,
                           schema_fingerprint, default_category,
-                          consecutive_failures, last_failure_code
+                          consecutive_failures, last_failure_code,
+                          adapter_config
                    FROM rate_source
                    WHERE is_enabled = TRUE
                    ORDER BY id"""
@@ -54,6 +57,7 @@ class RateSourceRepository:
                 "default_category": row[5],
                 "consecutive_failures": row[6],
                 "last_failure_code": row[7],
+                "adapter_config": row[8] if len(row) > 8 else None,
             }
             for row in rows
         ]

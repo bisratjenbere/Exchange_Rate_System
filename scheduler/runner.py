@@ -272,25 +272,22 @@ def _parse(adapter, raw_content: str, category: str = "UNKNOWN", adapter_config:
     Returns:
         tuple: (records, errors, warnings)
     """
-    from adapters.core.protocol import ParseContext
-    
-    # Build context with merged config
+    from datetime import date
+    from adapters.core.contract import ParseContext, Severity
+
     ctx = ParseContext(
-        source_id=0,  # Will be set by caller if needed
         category=category,
-        url="",  # Will be set by caller if needed
+        collection_date=date.today(),
+        source_id=0,
     )
-    
-    # Merge adapter_config into context if provided
-    if adapter_config:
-        for key, value in adapter_config.items():
-            setattr(ctx, key, value)
-    
-    # All clean adapters return ParseOutcome
+    if adapter_config and hasattr(adapter, "slug"):
+        adapter.slug = adapter_config.get("slug", adapter.slug)
+
     outcome = adapter.parse(raw_content, ctx)
-    
-    warnings = outcome.warnings if hasattr(outcome, 'warnings') else []
-    return outcome.records, outcome.errors, warnings
+    records = list(outcome.records) if hasattr(outcome, "records") else []
+    errors = [i.detail for i in outcome.issues if i.severity == Severity.ERROR] if hasattr(outcome, "issues") else (outcome.errors if hasattr(outcome, "errors") else [])
+    warnings = [i.detail for i in outcome.issues if i.severity == Severity.WARNING] if hasattr(outcome, "issues") else (outcome.warnings if hasattr(outcome, "warnings") else [])
+    return records, errors, warnings
 
 def _build_url(base_url: str, adapter_key: str) -> str:
     from datetime import date

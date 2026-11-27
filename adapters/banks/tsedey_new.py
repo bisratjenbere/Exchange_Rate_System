@@ -130,7 +130,7 @@ class TsedeyAdapter:
                                 selling_rate=selling_rate,
                                 ctx=ctx,
                                 effective_date=effective_date,
-                                effective_date_basis="source" if effective_date else "collection",
+                                effective_date_basis="source_published" if effective_date else "collection_date_fallback",
                             )
                             records.append(record)
                         else:
@@ -170,7 +170,7 @@ class TsedeyAdapter:
                                 selling_rate=w_selling_rate,
                                 ctx=ctx,
                                 effective_date=effective_date,
-                                effective_date_basis="source" if effective_date else "collection",
+                                effective_date_basis="source_published" if effective_date else "collection_date_fallback",
                             )
                             records.append(w_record)
                     except (ValueError, TypeError):

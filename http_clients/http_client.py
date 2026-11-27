@@ -89,13 +89,23 @@ class RequestsHttpClient(HttpClient):
         for attempt in range(self.max_retries + 1):
             try:
                 if post_data:
-                    response = requests.post(
-                        url,
-                        json=post_data,
-                        headers=req_headers,
-                        timeout=self.timeout,
-                        verify=ssl_verify
-                    )
+                    content_type = req_headers.get("Content-Type", "")
+                    if "application/json" in content_type:
+                        response = requests.post(
+                            url,
+                            json=post_data,
+                            headers=req_headers,
+                            timeout=self.timeout,
+                            verify=ssl_verify,
+                        )
+                    else:
+                        response = requests.post(
+                            url,
+                            data=post_data,
+                            headers=req_headers,
+                            timeout=self.timeout,
+                            verify=ssl_verify,
+                        )
                 else:
                     response = requests.get(
                         url,

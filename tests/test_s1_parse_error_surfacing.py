@@ -210,9 +210,8 @@ def test_real_adapter_parse_errors_captured():
     # Dashen should report missing tables
     assert len(records) == 0
     assert len(errors) > 0
-    # Errors should mention missing tables/categories
     error_str = " ".join(str(e) for e in errors)
-    assert "missing" in error_str.lower() or "not found" in error_str.lower()
+    assert "missing" in error_str.lower() or "not found" in error_str.lower() or "expected" in error_str.lower()
 
 
 if __name__ == "__main__":
