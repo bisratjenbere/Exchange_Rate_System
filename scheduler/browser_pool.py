@@ -199,8 +199,8 @@ class BrowserPool:
         
         try:
             self.pool.put_nowait(browser)
-            logger.debug(f"Browser released to pool")
-        except:
+            logger.debug("Browser released to pool")
+        except Exception:
             # Pool full (can happen with temporary browsers)
             logger.debug("Pool full, closing excess browser")
             try:

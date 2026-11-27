@@ -1,0 +1,44 @@
+line-length = 100
+
+[lint]
+select = [
+    "F",
+    "E",
+    "W",
+    "I",
+    "UP",
+]
+
+ignore = [
+    "E501",
+]
+
+fixable = ["I001", "UP045", "UP006", "UP017"]
+unfixable = []
+
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "F401",
+    "F811",
+    "F841",
+    "E401",
+    "E402",
+]
+
+[lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+known-first-party = [
+    "adapters",
+    "api",
+    "db",
+    "domain",
+    "field_detection",
+    "http_clients",
+    "infrastructure",
+    "pipeline",
+    "review",
+    "scheduler",
+    "tests",
+    "trusted_view",
+]

@@ -87,7 +87,7 @@ def parse_with_adapter(
             issues=(RowIssue(
                 row_ref="page",
                 code="bad_json",
-                detail=f"Adapter does not implement UniversalAdapter protocol",
+                detail="Adapter does not implement UniversalAdapter protocol",
                 severity=Severity.ERROR,
             ),),
             rows_seen=0,

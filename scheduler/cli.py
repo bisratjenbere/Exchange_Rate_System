@@ -144,7 +144,7 @@ def test_adapter(adapter_key, dry_run, show_records):
                 fp = adapter.schema_fingerprint(raw_content)
                 click.echo(f"\nSchema Fingerprint: {fp[:16]}...")
 
-            click.secho(f"\n✓ Test passed", fg='green')
+            click.secho("\n✓ Test passed", fg='green')
             sys.exit(0)
 
         finally:
