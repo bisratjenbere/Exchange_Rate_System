@@ -13,7 +13,7 @@ ignore = [
     "E501",
 ]
 
-fixable = ["I001", "UP045", "UP006", "UP017"]
+fixable = ["I001", "UP007", "UP006", "UP017"]
 unfixable = []
 
 [lint.per-file-ignores]
