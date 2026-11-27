@@ -177,6 +177,7 @@ def create_registry_with_all_adapters() -> AdapterRegistryV2:
         ("global_html", "adapters.banks.global_new"),
         ("goh_betoch_html", "adapters.banks.goh_betoch_new"),
         ("hibret_html", "adapters.banks.hibret_new"),
+        ("hijra_html", "adapters.banks.hijra_new"),
         ("nib_html", "adapters.banks.nib_new"),
         ("omo_html", "adapters.banks.omo_new"),
         ("oromia_html", "adapters.banks.oromia_new"),
