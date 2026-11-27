@@ -2,6 +2,8 @@ from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
+import logging
+import time
 
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from domain.records import UNKNOWN_CATEGORY
@@ -18,12 +20,20 @@ from db.repositories.rate_observation_repository import RateObservationRepositor
 from db.repositories.change_candidate_repository import ChangeCandidateRepository
 from db.repositories.rate_category_repository import RateCategoryRepository
 
+logger = logging.getLogger(__name__)
+
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
 # Batch size for savepoint optimization
 # Process this many records per savepoint to reduce DB round trips
 # Falls back to individual processing on batch error
 SAVEPOINT_BATCH_SIZE = 10
+
+# Query cache for category map (Phase 3E optimization)
+# Categories rarely change, so cache for 5 minutes to reduce DB queries
+_category_map_cache = None
+_cache_timestamp = None
+CATEGORY_CACHE_TTL = 300  # 5 minutes in seconds
 
 @dataclass
 class IngestResult:
@@ -68,8 +78,6 @@ def ingest(conn, records: list, source_id: int, run_id: int,
             individual_fallback_count += len(batch)
 
     # Log batch processing metrics
-    import logging
-    logger = logging.getLogger(__name__)
     if total_records > 0:
         batch_success_rate = ((total_records - individual_fallback_count) / total_records) * 100
         logger.debug(
@@ -305,9 +313,25 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         result.accepted += 1
 
 def _load_category_map(conn) -> dict:
-    """Load mapping of category codes to IDs."""
+    """Load mapping of category codes to IDs with 5-minute cache."""
+    global _category_map_cache, _cache_timestamp
+    
+    now = time.time()
+    
+    # Return cached value if still fresh
+    if _category_map_cache is not None and _cache_timestamp is not None:
+        age = now - _cache_timestamp
+        if age < CATEGORY_CACHE_TTL:
+            logger.debug(f"Category map cache hit (age: {age:.1f}s)")
+            return _category_map_cache
+    
+    # Cache miss or expired - fetch from database
+    logger.info("Category map cache miss - fetching from database")
     repo = RateCategoryRepository(conn)
-    return repo.get_active_categories_map()
+    _category_map_cache = repo.get_active_categories_map()
+    _cache_timestamp = now
+    
+    return _category_map_cache
 
 def _retire_older_current(conn, source_id: int, currency_code: str, category_id):
     """Retire older current observations using repository pattern."""
