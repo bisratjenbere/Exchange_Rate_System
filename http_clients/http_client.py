@@ -73,113 +73,78 @@ class RequestsHttpClient(HttpClient):
             req_headers.update(headers)
 
         if self.cloudflare_bypass and not post_data:
-            try:
-                logger.debug(f"Attempting Cloudflare bypass for {url}")
-                content = self.cloudflare_bypass.get(url, timeout=int(self.read_timeout))
-                return HttpResponse(
-                    content=content,
-                    status_code=200,
-                    url=url,
-                    error=None
-                )
-            except Exception as e:
-                logger.warning(f"Cloudflare bypass failed: {e}. Falling back to regular request")
+            result = self._try_cloudflare_bypass(url)
+            if result is not None:
+                return result
 
+        return self._fetch_with_retry(url, ssl_verify, post_data, req_headers)
+
+    def _try_cloudflare_bypass(self, url: str) -> Optional[HttpResponse]:
+        try:
+            logger.debug("Attempting Cloudflare bypass for %s", url)
+            content = self.cloudflare_bypass.get(url, timeout=int(self.read_timeout))
+            return HttpResponse(content=content, status_code=200, url=url, error=None)
+        except (OSError, RuntimeError) as e:
+            logger.warning("Cloudflare bypass failed: %s. Falling back to regular request", e)
+            return None
+
+    def _dispatch(self, url: str, ssl_verify: bool, post_data: Optional[dict], headers: dict):
+        if post_data:
+            content_type = headers.get("Content-Type", "")
+            kwargs = {"json": post_data} if "application/json" in content_type else {"data": post_data}
+            return requests.post(url, headers=headers, timeout=self.timeout, verify=ssl_verify, **kwargs)
+        return requests.get(url, headers=headers, timeout=self.timeout, verify=ssl_verify)
+
+    def _handle_cloudflare_challenge(self, url: str, response) -> HttpResponse:
+        if self.cloudflare_bypass:
+            try:
+                logger.info("Cloudflare challenge detected, forcing bypass with Playwright")
+                content = self.cloudflare_bypass.get(url, timeout=int(self.read_timeout), force_playwright=True)
+                return HttpResponse(content=content, status_code=200, url=url, error=None)
+            except (OSError, RuntimeError) as e:
+                logger.error("Cloudflare bypass with Playwright failed: %s", e)
+        return HttpResponse(
+            content=response.text,
+            status_code=response.status_code,
+            url=url,
+            error="Cloudflare protection detected. Install cloudscraper or playwright to bypass.",
+        )
+
+    def _fetch_with_retry(
+        self, url: str, ssl_verify: bool, post_data: Optional[dict], req_headers: dict
+    ) -> HttpResponse:
         last_error = None
         for attempt in range(self.max_retries + 1):
             try:
-                if post_data:
-                    content_type = req_headers.get("Content-Type", "")
-                    if "application/json" in content_type:
-                        response = requests.post(
-                            url,
-                            json=post_data,
-                            headers=req_headers,
-                            timeout=self.timeout,
-                            verify=ssl_verify,
-                        )
-                    else:
-                        response = requests.post(
-                            url,
-                            data=post_data,
-                            headers=req_headers,
-                            timeout=self.timeout,
-                            verify=ssl_verify,
-                        )
-                else:
-                    response = requests.get(
-                        url,
-                        headers=req_headers,
-                        timeout=self.timeout,
-                        verify=ssl_verify
-                    )
+                response = self._dispatch(url, ssl_verify, post_data, req_headers)
 
                 if self._is_cloudflare_challenge(response.text) and not post_data:
-                    if self.cloudflare_bypass:
-                        try:
-                            logger.info("Cloudflare challenge detected, forcing bypass with Playwright")
-                            content = self.cloudflare_bypass.get(url, timeout=int(self.read_timeout), force_playwright=True)
-                            return HttpResponse(
-                                content=content,
-                                status_code=200,
-                                url=url,
-                                error=None
-                            )
-                        except Exception as e:
-                            logger.error(f"Cloudflare bypass with Playwright failed: {e}")
-
-                    return HttpResponse(
-                        content=response.text,
-                        status_code=response.status_code,
-                        url=url,
-                        error="Cloudflare protection detected. Install cloudscraper or playwright to bypass."
-                    )
+                    return self._handle_cloudflare_challenge(url, response)
 
                 return HttpResponse(
                     content=response.text,
                     status_code=response.status_code,
                     url=url,
-                    error=None if response.ok else f"HTTP {response.status_code}"
+                    error=None if response.ok else f"HTTP {response.status_code}",
                 )
 
             except requests.ConnectTimeout as exc:
                 last_error = f"Connect timeout after {self.connect_timeout}s: {exc}"
-                if attempt < self.max_retries:
-                    delay = self.retry_delay * (2 ** attempt)
-                    time.sleep(delay)
-                    continue
-
             except requests.ReadTimeout as exc:
                 last_error = f"Read timeout after {self.read_timeout}s: {exc}"
-                if attempt < self.max_retries:
-                    delay = self.retry_delay * 3
-                    time.sleep(delay)
-                    continue
-
             except requests.Timeout as exc:
                 last_error = f"Timeout: {exc}"
-                if attempt < self.max_retries:
-                    delay = self.retry_delay * (2 ** attempt)
-                    time.sleep(delay)
-                    continue
-
             except requests.ConnectionError as exc:
                 last_error = f"Connection error: {exc}"
-                if attempt < self.max_retries:
-                    delay = self.retry_delay * (2 ** attempt)
-                    time.sleep(delay)
-                    continue
-
-            except Exception as exc:
+            except requests.RequestException as exc:
                 last_error = f"Request failed: {exc}"
                 break
 
-        return HttpResponse(
-            content="",
-            status_code=0,
-            url=url,
-            error=last_error
-        )
+            if attempt < self.max_retries:
+                delay = self.retry_delay * 3 if isinstance(exc, requests.ReadTimeout) else self.retry_delay * (2 ** attempt)
+                time.sleep(delay)
+
+        return HttpResponse(content="", status_code=0, url=url, error=last_error)
 
     def _is_cloudflare_challenge(self, html: str) -> bool:
         indicators = [
