@@ -2,10 +2,13 @@ import hashlib
 import importlib
 import time
 import traceback
+import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 import psycopg2
 import requests
+
+logger = logging.getLogger(__name__)
 from pipeline.runs import (
     start_run, finish_run, recover_stuck_run, record_raw_capture, reap_stuck_runs,
 )
@@ -176,7 +179,62 @@ def _fetch(url: str, ssl_verify: bool, post_data: dict = None,
     raise last_exc
 
 def _fetch_browser(adapter, source_url: str, ssl_verify: bool, user_agent: str) -> tuple:
-    return adapter.fetch_raw(source_url, user_agent, ssl_verify)
+    """
+    Fetch using pooled browser instance (if available).
+    Falls back to adapter's fetch_raw if browser pool not available.
+    """
+    try:
+        from scheduler.browser_pool import get_browser_pool
+        
+        pool = get_browser_pool()
+        browser = pool.acquire(timeout=30.0)
+        
+        if browser is None:
+            # Browser pool not initialized (Playwright not available)
+            # Fall back to adapter's fetch_raw
+            return adapter.fetch_raw(source_url, user_agent, ssl_verify)
+        
+        try:
+            # Create new context for isolation
+            context = browser.new_context(
+                user_agent=user_agent,
+                ignore_https_errors=not ssl_verify
+            )
+            
+            try:
+                page = context.new_page()
+                
+                # Navigate with timeout
+                page.goto(
+                    source_url,
+                    wait_until='domcontentloaded',
+                    timeout=30000
+                )
+                
+                # Wait for content to stabilize (some banks use delayed JS)
+                page.wait_for_timeout(2000)
+                
+                content = page.content()
+                
+                return content, 200
+                
+            finally:
+                # Always close context (but keep browser)
+                try:
+                    context.close()
+                except Exception as e:
+                    logger.warning(f"Error closing browser context: {e}")
+            
+        finally:
+            # Return browser to pool
+            pool.release(browser)
+            
+    except ImportError:
+        # Browser pool not available, fall back to adapter's fetch_raw
+        return adapter.fetch_raw(source_url, user_agent, ssl_verify)
+    except Exception as e:
+        logger.warning(f"Browser pool error: {e}, falling back to adapter fetch_raw")
+        return adapter.fetch_raw(source_url, user_agent, ssl_verify)
 
 def _check_schema(conn, run_id: int, source: dict, adapter, raw_content: str, repo: RateSourceRepository = None) -> bool:
     if not hasattr(adapter, "schema_fingerprint"):
