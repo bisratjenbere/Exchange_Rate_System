@@ -1,4 +1,5 @@
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, REGISTRY
+import time
 from typing import Optional
 
 collections_total = Counter(
@@ -103,7 +104,6 @@ def record_collection_success(adapter_key: str, accepted: int, rejected: int):
             reason='validation_failed'
         ).inc(rejected)
 
-    import time
     last_success_timestamp.labels(adapter_key=adapter_key).set(time.time())
 
 def record_collection_error(adapter_key: str, error_code: str):

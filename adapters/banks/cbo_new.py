@@ -1,16 +1,8 @@
-"""
-CBO (Cooperative Bank of Oromia) adapter - Multi-table pattern.
 
-Migration notes:
-- Old adapter: 85 LOC (estimated, file not checked)
-- New adapter: Multi-table wrapper (Pattern E)
-- Table 0: Wide format (Cash Buy/Sell + Transaction Buy/Sell) → 5 currencies × 2 categories
-- Table 1: Simple format (Weighted Average Buy/Sell) → 5 currencies × 1 category
-- Total: 15 records (5 cash + 5 transactional + 5 weighted_average)
 
-Pattern: Multi-table (Pattern E) - same as zamzam
-"""
+import hashlib
 
+from bs4 import BeautifulSoup
 from adapters.core.html_table import HtmlTableAdapter, TableSpec
 from adapters.core.contract import ParseContext, ParseOutcome, RowIssue, IssueCode, Severity
 from adapters.transport.base import FetchKind
@@ -35,22 +27,19 @@ class CBOAdapter:
     fetch_kind = FetchKind.HTTP_GET
     
     def parse(self, raw: str, ctx: ParseContext) -> ParseOutcome:
-        from bs4 import BeautifulSoup
-        
         if not raw or not raw.strip():
             return ParseOutcome.failed(IssueCode.EMPTY_PAYLOAD, "Empty HTML")
-        
+
         soup = BeautifulSoup(raw, "html.parser")
         tables = soup.find_all("table")
-        
+
         if len(tables) < 1:
             return ParseOutcome.failed(IssueCode.NO_TABLE, "No tables found")
-        
+
         records = []
         issues = []
         rows_seen = 0
-        
-        # Parse table 0: Cash + Transactional (wide format)
+
         if len(tables) >= 1:
             table0_records, table0_issues, table0_rows = self._parse_cash_txn_table(
                 tables[0], ctx
@@ -75,11 +64,8 @@ class CBOAdapter:
                 severity=Severity.WARNING
             ))
         
-        # Sort for determinism
         records.sort(key=lambda r: (r.source_currency_code, r.category))
-        
-        # Compute structure hash
-        import hashlib
+
         structure_text = f"cbo_multi_table#{len(tables)}"
         structure_hash = hashlib.sha256(structure_text.encode()).hexdigest()[:16]
         
@@ -91,11 +77,6 @@ class CBOAdapter:
         )
     
     def _parse_cash_txn_table(self, table, ctx: ParseContext):
-        """
-        Parse table 0: Wide format with Cash + Transaction rates.
-        
-        Columns: Currency | Cash Buy | Cash Sell | Txn Buy | Txn Sell
-        """
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
         issues = []
@@ -172,24 +153,17 @@ class CBOAdapter:
         return records, issues, len(rows)
     
     def _parse_weighted_table(self, table, ctx: ParseContext):
-        """
-        Parse table 1: Simple format with Weighted Average rates.
-        
-        Columns: Currency | Weighted Avg Buy | Weighted Avg Sell
-        """
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
         issues = []
-        
+
         for row_idx, row in enumerate(rows):
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-            
+
             if len(cells) < 3:
                 continue
-            
-            # Column 0: Currency
-            currency_text = cells[0]
-            currency_code = self._parse_currency_code(currency_text)
+
+            currency_code = self._parse_currency_code(cells[0])
             
             if not currency_code:
                 continue
@@ -235,9 +209,6 @@ class CBOAdapter:
         return records, issues, len(rows)
     
     def _parse_currency_code(self, text: str) -> str:
-        """
-        Extract currency code from text like "USD - US Dollar".
-        """
         # Try to extract 3-letter code at start
         parts = text.split()
         if parts and len(parts[0]) >= 3:

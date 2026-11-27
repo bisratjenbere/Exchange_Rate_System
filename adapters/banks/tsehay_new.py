@@ -17,6 +17,8 @@ from adapters.transport.base import FetchKind
 from adapters.core.numbers import parse_decimal
 from adapters.core.currency import normalize_currency
 from adapters.core.record_builder import build_record
+import hashlib
+from bs4 import BeautifulSoup
 
 
 class TsehayAdapter:
@@ -37,8 +39,6 @@ class TsehayAdapter:
     fetch_kind = FetchKind.HTTP_GET
     
     def parse(self, raw: str, ctx: ParseContext) -> ParseOutcome:
-        from bs4 import BeautifulSoup
-        
         if not raw or not raw.strip():
             return ParseOutcome.failed(IssueCode.EMPTY_PAYLOAD, "Empty HTML")
         
@@ -77,11 +77,8 @@ class TsehayAdapter:
                 severity=Severity.WARNING
             ))
         
-        # Sort for determinism
         records.sort(key=lambda r: (r.source_currency_code, r.category))
         
-        # Compute structure hash
-        import hashlib
         structure_text = f"tsehay_multi_table#{len(tables)}"
         structure_hash = hashlib.sha256(structure_text.encode()).hexdigest()[:16]
         

@@ -17,6 +17,8 @@ from adapters.core.numbers import parse_decimal
 from adapters.core.currency import normalize_currency
 from adapters.core.record_builder import build_record
 import re
+import hashlib
+from bs4 import BeautifulSoup
 
 
 class SidamaAdapter:
@@ -52,8 +54,6 @@ class SidamaAdapter:
     )
     
     def parse(self, raw: str, ctx: ParseContext) -> ParseOutcome:
-        from bs4 import BeautifulSoup
-        
         if not raw or not raw.strip():
             return ParseOutcome.failed(IssueCode.EMPTY_PAYLOAD, "Empty HTML")
         
@@ -124,11 +124,8 @@ class SidamaAdapter:
                 )
                 records.append(rec)
         
-        # Sort for determinism
         records.sort(key=lambda r: (r.source_currency_code, r.category))
         
-        # Compute structure hash
-        import hashlib
         structure_text = f"sidama_regex#{len(matches)}_blocks"
         structure_hash = hashlib.sha256(structure_text.encode()).hexdigest()[:16]
         

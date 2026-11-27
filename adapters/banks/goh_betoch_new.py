@@ -8,12 +8,14 @@ Migration notes:
 - Creates 3 records per row: transactional, cash (from buying/selling), weighted_average (from WAvg columns)
 """
 
-from adapters.core.html_table import HtmlTableAdapter, TableSpec
+from adapters.core.html_table import HtmlTableAdapter, TableSpec, find_table_by_headers, _compute_structure_hash
 from adapters.core.contract import ParseContext, ParseOutcome, RowIssue, IssueCode, Severity
 from adapters.transport.base import FetchKind
 from adapters.core.numbers import parse_decimal
 from adapters.core.currency import normalize_currency
 from adapters.core.record_builder import build_record
+import hashlib
+from bs4 import BeautifulSoup
 
 SPEC = TableSpec(
     key="goh_betoch_html",
@@ -43,13 +45,9 @@ class GohBetochAdapter:
     fetch_kind = FetchKind.HTTP_GET
     
     def parse(self, raw: str, ctx: ParseContext) -> ParseOutcome:
-        from bs4 import BeautifulSoup
-        from adapters.core.html_table import find_table_by_headers, _compute_structure_hash
-        
-        # Parse HTML
         if not raw or not raw.strip():
             return ParseOutcome.failed(IssueCode.EMPTY_PAYLOAD, "Empty HTML")
-        
+
         soup = BeautifulSoup(raw, "html.parser")
         
         # Find table with required headers
@@ -158,7 +156,6 @@ class GohBetochAdapter:
                 )
                 records.append(rec)
         
-        # Sort for determinism
         records.sort(key=lambda r: (r.source_currency_code, r.category))
         
         # Compute structure hash

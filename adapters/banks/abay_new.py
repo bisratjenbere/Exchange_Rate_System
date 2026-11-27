@@ -1,4 +1,7 @@
 
+import hashlib
+
+from bs4 import BeautifulSoup
 from adapters.core.html_table import HtmlTableAdapter, TableSpec
 from adapters.core.contract import ParseContext, ParseOutcome, RowIssue, IssueCode, Severity
 from adapters.transport.base import FetchKind
@@ -26,8 +29,6 @@ class AbayAdapter:
     fetch_kind = FetchKind.HTTP_GET
     
     def parse(self, raw: str, ctx: ParseContext) -> ParseOutcome:
-        from bs4 import BeautifulSoup
-        
         if not raw or not raw.strip():
             return ParseOutcome.failed(IssueCode.EMPTY_PAYLOAD, "Empty HTML")
         
@@ -71,8 +72,6 @@ class AbayAdapter:
         # Sort for determinism
         records.sort(key=lambda r: (r.source_currency_code, r.category))
         
-        # Compute structure hash
-        import hashlib
         structure_text = f"abay_multi_table#{len(tables)}"
         structure_hash = hashlib.sha256(structure_text.encode()).hexdigest()[:16]
         
@@ -84,57 +83,41 @@ class AbayAdapter:
         )
     
     def _parse_simple_table(self, table, category: str, ctx: ParseContext):
-        """
-        Parse a simple 3-column table: Currency | Buying | Selling
-        
-        Args:
-            table: BeautifulSoup table element
-            category: "weighted_average", "cash", or "transactional"
-            ctx: ParseContext
-        """
         rows = [r for r in table.find_all("tr") if r.find("td")]
         records = []
         issues = []
-        
-        for row_idx, row in enumerate(rows):
+
+        for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-            
+
             if len(cells) < 3:
                 continue
-            
-            # Column 0: Currency code
-            currency_text = cells[0]
-            currency_code = normalize_currency(currency_text)
-            
+
+            currency_code = normalize_currency(cells[0])
             if not currency_code:
                 continue
-            
-            # Column 1: Buying rate
+
             buy = None
             try:
                 buy = parse_decimal(cells[1])
             except ValueError:
-                # Empty or "No Trade" is acceptable for some currencies
                 pass
-            
-            # Column 2: Selling rate
+
             sell = None
             try:
                 sell = parse_decimal(cells[2])
             except ValueError:
-                # Empty or "No Trade" is acceptable for some currencies
                 pass
-            
+
             if buy is not None or sell is not None:
-                rec = build_record(
+                records.append(build_record(
                     currency_code=currency_code,
                     category=category,
                     buying_rate=buy,
                     selling_rate=sell,
                     ctx=ctx
-                )
-                records.append(rec)
-        
+                ))
+
         return records, issues, len(rows)
 
 

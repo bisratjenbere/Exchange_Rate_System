@@ -18,6 +18,7 @@ from adapters.core.numbers import parse_decimal
 from adapters.core.currency import normalize_currency
 from adapters.core.record_builder import build_record
 import json
+import hashlib
 
 
 class RammisAdapter:
@@ -112,11 +113,8 @@ class RammisAdapter:
                 )
                 records.append(rec)
         
-        # Sort for determinism
         records.sort(key=lambda r: (r.source_currency_code, r.category))
         
-        # Compute structure hash
-        import hashlib
         structure_text = f"rammis_json#{len(items)}_items"
         structure_hash = hashlib.sha256(structure_text.encode()).hexdigest()[:16]
         

@@ -20,6 +20,7 @@ Usage:
         log_issue(issue)
 """
 
+import inspect
 from typing import Protocol, Optional
 from adapters.core.contract import ParseContext, ParseOutcome
 
@@ -128,8 +129,6 @@ def validate_adapter(adapter: object) -> list[str]:
     elif not callable(adapter.parse):
         errors.append("Attribute 'parse' must be callable")
     else:
-        # Check parse method signature
-        import inspect
         sig = inspect.signature(adapter.parse)
         params = list(sig.parameters.keys())
         
