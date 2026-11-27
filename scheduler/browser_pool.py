@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 class BrowserPool:
+    _instance: Optional["BrowserPool"] = None
+
     """
     Manages a pool of reusable Playwright browser instances.
     
@@ -274,38 +276,23 @@ class BrowserPool:
         self.shutdown()
 
 
-# Global singleton instance
-_browser_pool: Optional[BrowserPool] = None
+# Singleton managed at class level to avoid module-level mutable globals
 _pool_lock = Lock()
 
 
 def get_browser_pool() -> BrowserPool:
-    """
-    Get or create global browser pool instance.
-    
-    Thread-safe singleton pattern.
-    """
-    global _browser_pool
-    
-    if _browser_pool is None:
+    if BrowserPool._instance is None:
         with _pool_lock:
-            if _browser_pool is None:
-                _browser_pool = BrowserPool(
+            if BrowserPool._instance is None:
+                BrowserPool._instance = BrowserPool(
                     max_browsers=3,
-                    recycle_after_uses=10
+                    recycle_after_uses=10,
                 )
-    
-    return _browser_pool
+    return BrowserPool._instance
 
 
 def shutdown_browser_pool():
-    """
-    Shutdown global browser pool.
-    
-    Should be called on application shutdown.
-    """
-    global _browser_pool
-    
-    if _browser_pool is not None:
-        _browser_pool.shutdown()
-        _browser_pool = None
+    with _pool_lock:
+        if BrowserPool._instance is not None:
+            BrowserPool._instance.shutdown()
+            BrowserPool._instance = None

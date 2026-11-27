@@ -22,6 +22,7 @@ class CircuitStatus:
         return f"{self.state.value.upper()} (failures={self.failure_count})"
 
 class CircuitBreaker:
+    _instance: Optional["CircuitBreaker"] = None
 
     def __init__(
         self,
@@ -174,14 +175,16 @@ class CircuitBreaker:
 
         return "\n".join(lines)
 
-_default_breaker: Optional[CircuitBreaker] = None
+_cb_lock = __import__("threading").Lock()
+
 
 def get_default_circuit_breaker() -> CircuitBreaker:
-    global _default_breaker
-    if _default_breaker is None:
-        _default_breaker = CircuitBreaker(
-            failure_threshold=3,
-            recovery_timeout=300.0,
-            half_open_timeout=60.0
-        )
-    return _default_breaker
+    if CircuitBreaker._instance is None:
+        with _cb_lock:
+            if CircuitBreaker._instance is None:
+                CircuitBreaker._instance = CircuitBreaker(
+                    failure_threshold=3,
+                    recovery_timeout=300.0,
+                    half_open_timeout=60.0,
+                )
+    return CircuitBreaker._instance
