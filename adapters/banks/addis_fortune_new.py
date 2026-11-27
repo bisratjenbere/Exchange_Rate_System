@@ -158,7 +158,7 @@ class AddisFortuneAdapter:
                 if days_old > STALENESS_DAYS:
                     issues.append(RowIssue(
                         row_ref,
-                        IssueCode.STALE_DATA,
+                        IssueCode.STALE_DATE,
                         f"{currency}: rate is {days_old} days old (applicable_date: {applicable_date_str})",
                         Severity.WARNING,
                     ))

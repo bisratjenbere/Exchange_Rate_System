@@ -51,12 +51,13 @@ def fetch_parse_and_check_schema(
 
     adapter = adapter_registry.get(adapter_key)
     
-    # Check for FETCH_METHOD attribute (browser-based adapters)
-    fetch_method = getattr(adapter, "FETCH_METHOD", None)
+    # Check fetch_kind attribute (FetchKind enum)
+    from adapters.transport.base import FetchKind
+    fetch_kind = getattr(adapter, "fetch_kind", None)
 
     timeout_config = get_timeout_config(adapter_key)
 
-    if fetch_method == "browser":
+    if fetch_kind == FetchKind.BROWSER:
         raw_content, http_status = _fetch_browser(
             adapter, source_url, ssl_verify, user_agent
         )
