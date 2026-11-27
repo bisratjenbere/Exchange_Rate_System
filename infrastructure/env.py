@@ -1,4 +1,7 @@
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 def load_env():
     for fpath in ('.env.local', '.env'):
@@ -13,7 +16,7 @@ def load_env():
                             v = v.strip().strip('"').strip("'")
                             if k not in os.environ:
                                 os.environ[k] = v
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.warning("Could not read env file %s: %s", fpath, exc)
 
 load_env()

@@ -109,12 +109,11 @@ class ParallelScheduler:
                             f"elapsed={elapsed:.1f}s"
                         )
                         
-                    except Exception as exc:
+                    except Exception as exc:  # worker must not crash — catch all adapter/DB errors
                         logger.error(
-                            f"Worker {worker_id} exception: {exc}",
+                            "Worker %d exception: %s", worker_id, exc,
                             exc_info=True
                         )
-                        # Add error results for failed sources
                         for source in queue:
                             results.append({
                                 'source_id': source.id,
@@ -182,9 +181,9 @@ class ParallelScheduler:
                             f"Worker {worker_id}: {source.adapter_key} -> {result.get('status')}"
                         )
                         
-                    except Exception as exc:
+                    except Exception as exc:  # worker must not crash — catch all adapter/DB errors
                         logger.error(
-                            f"Worker {worker_id}: {source.adapter_key} failed: {exc}",
+                            "Worker %d: %s failed: %s", worker_id, source.adapter_key, exc,
                             exc_info=True
                         )
                         results.append({
@@ -196,9 +195,9 @@ class ParallelScheduler:
             
             return results
             
-        except Exception as exc:
+        except Exception as exc:  # worker must not crash — catch connection pool errors
             logger.error(
-                f"Worker {worker_id}: failed to acquire connection from pool: {exc}",
+                "Worker %d: failed to acquire connection from pool: %s", worker_id, exc,
                 exc_info=True
             )
             # Return error results for all sources in queue
