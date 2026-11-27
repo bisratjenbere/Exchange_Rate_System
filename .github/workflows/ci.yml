@@ -9,6 +9,7 @@ on:
 env:
   # Explicitly set test database to prevent production access
   DATABASE_URL: "postgresql://test:test@localhost:5432/exchange_rate_test"
+  PYTHONPATH: "."
 
 jobs:
   test:
