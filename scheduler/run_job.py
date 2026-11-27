@@ -14,6 +14,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Import browser pool for cleanup
 from scheduler.browser_pool import shutdown_browser_pool, get_browser_pool
 
+# Import database connection pool
+from db.manager import DatabaseManager
+
 from scheduler.parallel_runner import run_all_parallel
 from scheduler.health import quick_health_check
 from scheduler.control import CollectionControl
@@ -37,6 +40,19 @@ def main():
         dsn = dsn.replace("postgres://", "postgresql://", 1)
     started = datetime.now(timezone.utc).isoformat()
     log.info("collection started at=%s dsn=%s", started, dsn.split("@")[-1])
+
+    # Initialize connection pool early
+    try:
+        DatabaseManager.initialize(
+            min_conn=2,
+            max_conn=10,
+            dsn=dsn,
+            timeout=30
+        )
+        log.info("database connection pool initialized: 2-10 connections")
+    except Exception as exc:
+        log.error("failed to initialize connection pool: %s", exc)
+        sys.exit(1)
 
     conn = None
     for attempt in range(1, 4):
@@ -68,6 +84,25 @@ def main():
         results = run_all_parallel(conn, max_workers=5, timeout_budget=1500.0)
     finally:
         conn.close()
+        
+        # Log connection pool metrics
+        try:
+            pool_status = DatabaseManager.get_pool_status()
+            if pool_status.get('initialized'):
+                log.info(
+                    "connection pool stats: min=%d max=%d",
+                    pool_status.get('min_conn', 0),
+                    pool_status.get('max_conn', 0)
+                )
+        except Exception:
+            pass
+        
+        # Cleanup connection pool
+        try:
+            DatabaseManager.close_all()
+            log.info("connection pool closed")
+        except Exception as exc:
+            log.warning("error closing connection pool: %s", exc)
         
         # Cleanup browser pool
         try:

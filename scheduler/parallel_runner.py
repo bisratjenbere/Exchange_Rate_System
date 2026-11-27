@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 
 import psycopg2
 
+from db.manager import DatabaseManager
 from scheduler.runner import Scheduler
 from pipeline.runs import reap_stuck_runs
 from infrastructure.config import Config
@@ -54,7 +55,6 @@ class ParallelScheduler(Scheduler):
 
     def run_all_parallel(self, conn) -> List[Dict[str, Any]]:
         reap_stuck_runs(conn, threshold_minutes=5)
-        dsn = self._get_dsn(conn)
 
         repo = RateSourceRepository(conn)
         sources = repo.get_enabled_sources()
@@ -98,7 +98,6 @@ class ParallelScheduler(Scheduler):
                 
                 future = executor.submit(
                     self._process_worker_queue,
-                    dsn,
                     worker_id,
                     queue
                 )
@@ -167,29 +166,9 @@ class ParallelScheduler(Scheduler):
 
         return results
 
-    def _run_source_with_connection(
-        self,
-        dsn: str,
-        source_id: int
-    ) -> Dict[str, Any]:
-        conn = None
-        try:
-            conn = psycopg2.connect(dsn)
 
-            result = self.run_source(conn, source_id)
-
-            return result
-
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-    
     def _process_worker_queue(
         self,
-        dsn: str,
         worker_id: int,
         queue: List[Dict]
     ) -> List[Dict[str, Any]]:
@@ -197,42 +176,50 @@ class ParallelScheduler(Scheduler):
         Process a queue of sources sequentially in one worker.
         
         Each worker gets a pre-balanced queue of sources.
+        Uses connection pool for database access.
         """
-        conn = None
         results = []
         
         try:
-            conn = psycopg2.connect(dsn)
-            
-            for source in queue:
-                try:
-                    result = self.run_source(conn, source['id'])
-                    results.append(result)
-                    
-                    logger.debug(
-                        f"Worker {worker_id}: {source['adapter_key']} -> {result.get('status')}"
-                    )
-                    
-                except Exception as exc:
-                    logger.error(
-                        f"Worker {worker_id}: {source['adapter_key']} failed: {exc}",
-                        exc_info=True
-                    )
-                    results.append({
-                        'source_id': source['id'],
-                        'status': 'error',
-                        'detail': str(exc),
-                        'adapter_key': source['adapter_key']
-                    })
+            # Use connection pool instead of direct connect
+            with DatabaseManager.connection() as conn:
+                logger.debug(f"Worker {worker_id}: acquired connection from pool")
+                
+                for source in queue:
+                    try:
+                        result = self.run_source(conn, source['id'])
+                        results.append(result)
+                        
+                        logger.debug(
+                            f"Worker {worker_id}: {source['adapter_key']} -> {result.get('status')}"
+                        )
+                        
+                    except Exception as exc:
+                        logger.error(
+                            f"Worker {worker_id}: {source['adapter_key']} failed: {exc}",
+                            exc_info=True
+                        )
+                        results.append({
+                            'source_id': source['id'],
+                            'status': 'error',
+                            'detail': str(exc),
+                            'adapter_key': source['adapter_key']
+                        })
             
             return results
             
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+        except Exception as exc:
+            logger.error(
+                f"Worker {worker_id}: failed to acquire connection from pool: {exc}",
+                exc_info=True
+            )
+            # Return error results for all sources in queue
+            return [{
+                'source_id': source['id'],
+                'status': 'error',
+                'detail': 'connection pool error',
+                'adapter_key': source.get('adapter_key', 'unknown')
+            } for source in queue]
 
     def _prioritize_sources(self, sources: List[Dict]) -> List[Dict]:
         def get_priority(source):
@@ -240,17 +227,6 @@ class ParallelScheduler(Scheduler):
             return PRIORITY_ORDER.get(adapter_key, 999)
 
         return sorted(sources, key=get_priority)
-
-    def _get_dsn(self, conn) -> str:
-        try:
-            info = conn.info
-            if hasattr(info, 'dsn'):
-                return info.dsn
-        except Exception:
-            pass
-
-        config = Config()
-        return config.DATABASE_URL
 
 def run_all_parallel(conn, max_workers: int = 5, timeout_budget: float = 300.0) -> List[Dict]:
     scheduler = ParallelScheduler(
