@@ -4,6 +4,7 @@ import datetime
 import json
 import logging
 import time
+import threading
 import psycopg2
 from psycopg2 import pool
 from flask import Flask, jsonify, request, render_template, abort
@@ -43,6 +44,135 @@ DB_STATEMENT_TIMEOUT = int(os.environ.get("DB_STATEMENT_TIMEOUT", "10000"))
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*")
 
+class ConnectionPoolManager:
+    """Manages database connection pool as a singleton with thread-safe access."""
+    
+    _instance: "ConnectionPoolManager | None" = None
+    _lock = threading.Lock()
+    
+    def __init__(self):
+        self._pool = None
+        self._dsn = DSN
+        self._connect_timeout = DB_CONNECT_TIMEOUT
+        self._statement_timeout = DB_STATEMENT_TIMEOUT
+        self._initialize_pool()
+    
+    @classmethod
+    def instance(cls) -> "ConnectionPoolManager":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+    
+    def _initialize_pool(self):
+        """Create the connection pool."""
+        try:
+            self._pool = self._make_pool()
+            logger.info("Database connection pool initialized")
+        except Exception as exc:
+            logger.error("Failed to create DB connection pool at startup: %s", exc)
+            self._pool = None
+    
+    def _make_pool(self):
+        """Factory method to create a new connection pool."""
+        kwargs = {
+            "minconn": 1,
+            "maxconn": 10,
+            "dsn": self._dsn,
+            "connect_timeout": self._connect_timeout,
+        }
+        if "-pooler" not in self._dsn:
+            kwargs["options"] = f"-c statement_timeout={self._statement_timeout}"
+        return pool.ThreadedConnectionPool(**kwargs)
+    
+    def reset_pool(self):
+        """Reset the connection pool (for fork scenarios)."""
+        with self._lock:
+            if self._pool is not None:
+                try:
+                    self._pool.closeall()
+                except Exception:
+                    pass
+                self._pool = None
+    
+    def get_connection(self):
+        """Get a connection from the pool, creating pool if needed."""
+        for attempt in range(3):
+            with self._lock:
+                if self._pool is None:
+                    try:
+                        self._pool = self._make_pool()
+                    except Exception as exc:
+                        if attempt == 2:
+                            logger.error("Failed to lazily create DB connection pool: %s", exc)
+                            raise RuntimeError("Database connection pool is not available") from exc
+                        time.sleep(0.5 * (attempt + 1))
+                        continue
+            
+            conn = None
+            try:
+                conn = self._pool.getconn()
+                if conn.closed != 0:
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    conn = None
+                    continue
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                return conn
+            except Exception as exc:
+                if conn is not None:
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    conn = None
+                if attempt == 2:
+                    logger.error("Failed to acquire healthy DB connection: %s", exc)
+                    raise
+                time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError("Could not acquire database connection")
+    
+    def return_connection(self, conn, error: bool = False):
+        """Return a connection to the pool."""
+        if conn is None or self._pool is None:
+            return
+        try:
+            if error or conn.closed != 0:
+                self._pool.putconn(conn, close=True)
+            else:
+                conn.rollback()
+                self._pool.putconn(conn)
+        except Exception:
+            try:
+                self._pool.putconn(conn, close=True)
+            except Exception:
+                pass
+
+
+# Initialize global pool manager
+_pool_manager = ConnectionPoolManager.instance()
+
+# Legacy compatibility functions
+def _reset_pool():
+    """Legacy function for gunicorn post_fork hook."""
+    _pool_manager.reset_pool()
+
+def _conn():
+    """Legacy function - get a connection from the pool."""
+    return _pool_manager.get_connection()
+
+def _put(conn, error: bool = False):
+    """Legacy function - return a connection to the pool."""
+    _pool_manager.return_connection(conn, error=error)
+
+
+PAGE_SIZE = 25
+
+
 @app.after_request
 def add_cors(response):
     response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGINS
@@ -50,87 +180,6 @@ def add_cors(response):
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return response
 
-def _make_pool():
-    kwargs = {
-        "minconn": 1,
-        "maxconn": 10,
-        "dsn": DSN,
-        "connect_timeout": DB_CONNECT_TIMEOUT,
-    }
-    if "-pooler" not in DSN:
-        kwargs["options"] = f"-c statement_timeout={DB_STATEMENT_TIMEOUT}"
-    return pool.ThreadedConnectionPool(**kwargs)
-
-try:
-    _pool = _make_pool()
-except Exception as exc:
-    logger.error("Failed to create DB connection pool at startup: %s", exc)
-    _pool = None
-
-PAGE_SIZE = 25
-
-def _reset_pool():
-    global _pool
-    if _pool is not None:
-        try:
-            _pool.closeall()
-        except Exception:
-            pass
-        _pool = None
-
-def _conn():
-    global _pool
-    for attempt in range(3):
-        if _pool is None:
-            try:
-                _pool = _make_pool()
-            except Exception as exc:
-                if attempt == 2:
-                    logger.error("Failed to lazily create DB connection pool: %s", exc)
-                    raise RuntimeError("Database connection pool is not available") from exc
-                time.sleep(0.5 * (attempt + 1))
-                continue
-        conn = None
-        try:
-            conn = _pool.getconn()
-            if conn.closed != 0:
-                try:
-                    _pool.putconn(conn, close=True)
-                except Exception:
-                    pass
-                conn = None
-                continue
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-            return conn
-        except Exception as exc:
-            if conn is not None:
-                try:
-                    _pool.putconn(conn, close=True)
-                except Exception:
-                    pass
-                conn = None
-            if attempt == 2:
-                logger.error("Failed to acquire healthy DB connection: %s", exc)
-                raise
-            time.sleep(0.5 * (attempt + 1))
-    raise RuntimeError("Could not acquire database connection")
-
-def _put(conn, error: bool = False):
-    global _pool
-    if conn is None or _pool is None:
-        return
-    try:
-        if error or conn.closed != 0:
-            _pool.putconn(conn, close=True)
-        else:
-            conn.rollback()
-            _pool.putconn(conn)
-    except Exception:
-        try:
-            _pool.putconn(conn, close=True)
-        except Exception:
-            pass
 
 def _serialise(obj):
     if isinstance(obj, decimal.Decimal):
