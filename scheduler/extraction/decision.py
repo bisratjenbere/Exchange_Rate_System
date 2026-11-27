@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
+from adapters.core.dates import business_date_now
+
 from domain.records import AdapterRecord
 
 
@@ -65,7 +67,7 @@ def classify_records(records: list[AdapterRecord]) -> RecordClassification:
 
     # Case 2: Check if all records are stale
     all_stale = all(
-        r.effective_date and (date.today() - r.effective_date).days > STALE_THRESHOLD_DAYS
+        r.effective_date and (business_date_now() - r.effective_date).days > STALE_THRESHOLD_DAYS
         for r in records
     )
 

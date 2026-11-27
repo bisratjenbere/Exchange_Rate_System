@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from adapters.addis_fortune.adapter import AF_SLUG_MAP, AddisFortuneAdapter
+from adapters.banks.addis_fortune import AF_SLUG_MAP, AddisFortuneAdapter
 from domain.fallback import FallbackPolicy
 from infrastructure.error_classifier import default_classifier
 from infrastructure.rate_source_repository import RateSourceRepository

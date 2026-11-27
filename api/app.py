@@ -14,6 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("api")
 
+from adapters.core.dates import business_date_now
 from trusted_view.query import (
     get_trusted_rates,
     get_trusted_rates_by_currency,
@@ -400,7 +401,7 @@ def usd_matrix():
         if conn:
             _put(conn, error=has_error)
 
-    today = datetime.date.today()
+    today = business_date_now()
     all_dates = [today - datetime.timedelta(days=i) for i in range(31)]
 
     successful_runs = set()

@@ -1,5 +1,5 @@
 """
-Adapter Registry V2 - Clean architecture adapter registry
+Adapter Registry - Clean architecture adapter registry
 
 Supports:
 - Clean adapters implementing UniversalAdapter protocol
@@ -13,7 +13,7 @@ Design:
 
 Usage:
     # Register adapter
-    from adapters.banks.cbe_new import ADAPTER
+    from adapters.banks.cbe import ADAPTER
     registry.register("cbe_api", ADAPTER)
     
     # Get adapter
@@ -53,7 +53,7 @@ class AdapterRegistryV2:
             ValueError: If adapter_key already registered or adapter invalid
         
         Example:
-            >>> from adapters.banks.cbe_new import ADAPTER
+            >>> from adapters.banks.cbe import ADAPTER
             >>> registry.register("cbe_api", ADAPTER)
         """
         if adapter_key in self._adapters:
@@ -88,7 +88,7 @@ class AdapterRegistryV2:
         
         Example:
             >>> adapter = registry.get("cbe_api")
-            >>> outcome = adapter.parse(raw_content, ctx)
+            >>> outcome = adapter.parse(raw_content, ctx)  # noqa
         """
         if adapter_key not in self._adapters:
             available = ', '.join(sorted(self._adapters.keys()))
@@ -142,72 +142,61 @@ class AdapterRegistryV2:
 
 def create_registry_with_all_adapters() -> AdapterRegistryV2:
     """
-    Create registry with all clean adapters.
-    
-    Returns:
-        Fully populated AdapterRegistryV2 with all 32 clean adapters
-    
+    Create registry with all 33 adapters.
+
     Example:
         >>> registry = create_registry_with_all_adapters()
         >>> adapter = registry.get("cbe_api")
     """
     registry = AdapterRegistryV2()
-    
-    # Register ALL clean adapters from adapters/banks/
-    logger.info("Registering clean adapters from adapters/banks/...")
-    
-    # List of all clean adapters (32 total - 100% CLEAN!)
-    clean_adapters = [
-        ("abay_html", "adapters.banks.abay_new"),
-        ("addis_fortune", "adapters.banks.addis_fortune_new"),
-        ("adib_api", "adapters.banks.adib_new"),
-        ("ahadu_html", "adapters.banks.ahadu_new"),
-        ("amhara_html", "adapters.banks.amhara_new"),
-        ("anbesa_browser", "adapters.banks.anbesa_new"),
-        ("awash_ajax", "adapters.banks.awash_new"),
-        ("berhan_html", "adapters.banks.berhan_new"),
-        ("boa_html", "adapters.banks.boa_new"),
-        ("bunna_html", "adapters.banks.bunna_new"),
-        ("cbe_api", "adapters.banks.cbe_new"),
-        ("cbo_html", "adapters.banks.cbo_new"),
-        ("dashen_html", "adapters.banks.dashen_new"),
-        ("dbe_html", "adapters.banks.dbe_new"),
-        ("enat_html", "adapters.banks.enat_new"),
-        ("gadaa_api", "adapters.banks.gadaa_new"),
-        ("global_html", "adapters.banks.global_new"),
-        ("goh_betoch_html", "adapters.banks.goh_betoch_new"),
-        ("hibret_html", "adapters.banks.hibret_new"),
-        ("hijra_html", "adapters.banks.hijra_new"),
-        ("nib_html", "adapters.banks.nib_new"),
-        ("omo_html", "adapters.banks.omo_new"),
-        ("oromia_html", "adapters.banks.oromia_new"),
-        ("rammis_api", "adapters.banks.rammis_new"),
-        ("shabelle_html", "adapters.banks.shabelle_new"),
-        ("sidama_html", "adapters.banks.sidama_new"),
-        ("siinqee_html", "adapters.banks.siinqee_new"),
-        ("siket_html", "adapters.banks.siket_new"),
-        ("tsehay_html", "adapters.banks.tsehay_new"),
-        ("tsedey_html", "adapters.banks.tsedey_new"),
-        ("wegagen_api", "adapters.banks.wegagen_new"),
-        ("zamzam_html", "adapters.banks.zamzam_new"),
-        ("zemen_ajax", "adapters.banks.zemen_new"),
+
+    adapters = [
+        ("abay_html",        "adapters.banks.abay"),
+        ("addis_fortune",    "adapters.banks.addis_fortune"),
+        ("adib_api",         "adapters.banks.adib"),
+        ("ahadu_html",       "adapters.banks.ahadu"),
+        ("amhara_html",      "adapters.banks.amhara"),
+        ("anbesa_browser",   "adapters.banks.anbesa"),
+        ("awash_ajax",       "adapters.banks.awash"),
+        ("berhan_html",      "adapters.banks.berhan"),
+        ("boa_html",         "adapters.banks.boa"),
+        ("bunna_html",       "adapters.banks.bunna"),
+        ("cbe_api",          "adapters.banks.cbe"),
+        ("cbo_html",         "adapters.banks.cbo"),
+        ("dashen_html",      "adapters.banks.dashen"),
+        ("dbe_html",         "adapters.banks.dbe"),
+        ("enat_html",        "adapters.banks.enat"),
+        ("gadaa_api",        "adapters.banks.gadaa"),
+        ("global_html",      "adapters.banks.global"),
+        ("goh_betoch_html",  "adapters.banks.goh_betoch"),
+        ("hibret_html",      "adapters.banks.hibret"),
+        ("hijra_html",       "adapters.banks.hijra"),
+        ("nib_html",         "adapters.banks.nib"),
+        ("omo_html",         "adapters.banks.omo"),
+        ("oromia_html",      "adapters.banks.oromia"),
+        ("rammis_api",       "adapters.banks.rammis"),
+        ("shabelle_html",    "adapters.banks.shabelle"),
+        ("sidama_html",      "adapters.banks.sidama"),
+        ("siinqee_html",     "adapters.banks.siinqee"),
+        ("siket_html",       "adapters.banks.siket"),
+        ("tsehay_html",      "adapters.banks.tsehay"),
+        ("tsedey_html",      "adapters.banks.tsedey"),
+        ("wegagen_api",      "adapters.banks.wegagen"),
+        ("zamzam_html",      "adapters.banks.zamzam"),
+        ("zemen_ajax",       "adapters.banks.zemen"),
     ]
-    
-    clean_registered = 0
-    
-    for adapter_key, module_path in clean_adapters:
+
+    registered = 0
+    for adapter_key, module_path in adapters:
         try:
             module = importlib.import_module(module_path)
             adapter = getattr(module, 'ADAPTER')
             registry.register(adapter_key, adapter)
-            logger.info(f"✓ Registered clean adapter: {adapter_key}")
-            clean_registered += 1
+            registered += 1
         except Exception as e:
-            logger.warning(f"✗ Failed to register {adapter_key}: {e}")
-    
-    logger.info(f"Registered {clean_registered}/32 clean adapters")
-    logger.info(f"Registry initialized: {clean_registered} total clean adapters")
-    
+            logger.warning("Failed to register %s: %s", adapter_key, e)
+
+    logger.info("Registry initialized: %d/33 adapters registered", registered)
     return registry
 
 

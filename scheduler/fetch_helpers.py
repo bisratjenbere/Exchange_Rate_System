@@ -5,6 +5,7 @@ from datetime import date
 
 import requests
 
+from adapters.core.dates import business_date_now
 from infrastructure.config import Config
 from domain.source import RateSource
 from infrastructure.rate_source_repository import RateSourceRepository
@@ -106,7 +107,7 @@ def _check_schema(conn, run_id: int, source: RateSource, adapter, raw_content: s
 
 
 def _build_url(base_url: str, adapter_key: str) -> str:
-    today = date.today().isoformat()
+    today = business_date_now().isoformat()
     if adapter_key == "cbe_api":
         sep = "&" if "?" in base_url else "?"
         return f"{base_url}{sep}Date={today}"

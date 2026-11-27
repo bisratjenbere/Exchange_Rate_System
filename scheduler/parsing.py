@@ -3,6 +3,7 @@ from datetime import date
 from typing import Any, Tuple, List
 
 from adapters.core.contract import ParseContext, ParseOutcome, RowIssue, Severity
+from adapters.core.dates import business_date_now
 from adapters.core.protocol import UniversalAdapter, is_universal_adapter
 from domain.source import RateSource
 
@@ -15,7 +16,7 @@ def create_parse_context(
 ) -> ParseContext:
     return ParseContext(
         category=source.default_category or "cash",
-        collection_date=collection_date or date.today(),
+        collection_date=collection_date or business_date_now(),
         source_id=source.id,
     )
 

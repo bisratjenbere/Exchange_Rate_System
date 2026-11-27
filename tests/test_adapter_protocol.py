@@ -103,7 +103,7 @@ def test_validate_adapter_detects_missing_parse():
 def test_new_adapter_works_with_actual_import():
     """Test that actual clean adapters satisfy protocol"""
     try:
-        from adapters.banks.cbe_new import ADAPTER
+        from adapters.banks.cbe import ADAPTER
         assert is_universal_adapter(ADAPTER)
         errors = validate_adapter(ADAPTER)
         assert errors == []
@@ -112,7 +112,7 @@ def test_new_adapter_works_with_actual_import():
 
 
 def test_all_registered_adapters_satisfy_protocol():
-    """Test that all 32 registered adapters satisfy the protocol"""
+    """Test that all 33 registered adapters satisfy the protocol"""
     try:
         from infrastructure.adapter_registry_v2 import default_registry
         

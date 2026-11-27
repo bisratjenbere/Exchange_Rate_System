@@ -9,7 +9,7 @@ import pytest
 from datetime import date
 from pathlib import Path
 
-from adapters.banks.cbe_new import ADAPTER
+from adapters.banks.cbe import ADAPTER
 from adapters.core.contract import ParseContext
 
 

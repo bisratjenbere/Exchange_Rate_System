@@ -86,7 +86,7 @@ def is_universal_adapter(obj: object) -> bool:
         True if object has required attributes and methods
     
     Example:
-        >>> from adapters.banks.cbe_new import ADAPTER
+        >>> from adapters.banks.cbe import ADAPTER
         >>> is_universal_adapter(ADAPTER)
         True
     """

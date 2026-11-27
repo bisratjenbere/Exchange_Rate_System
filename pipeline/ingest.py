@@ -29,10 +29,36 @@ MAX_INTRADAY_JUMP_PERCENT = 20.0
 
 SAVEPOINT_BATCH_SIZE = 10
 
-_category_map_cache = None
-_cache_timestamp = None
-_cache_lock = threading.Lock()
 CATEGORY_CACHE_TTL = 300
+
+
+class _CategoryCache:
+    def __init__(self):
+        self._data = None
+        self._timestamp = None
+        self._lock = threading.Lock()
+
+    def get(self, conn) -> dict:
+        now = time.time()
+        if self._data is not None and self._timestamp is not None:
+            if now - self._timestamp < CATEGORY_CACHE_TTL:
+                return self._data
+        with self._lock:
+            if self._data is not None and self._timestamp is not None:
+                if now - self._timestamp < CATEGORY_CACHE_TTL:
+                    return self._data
+            repo = RateCategoryRepository(conn)
+            self._data = repo.get_active_categories_map()
+            self._timestamp = time.time()
+        return self._data
+
+    def reset(self):
+        with self._lock:
+            self._data = None
+            self._timestamp = None
+
+
+_cache = _CategoryCache()
 
 @dataclass
 class IngestResult:
@@ -282,22 +308,7 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         result.accepted += 1
 
 def _load_category_map(conn) -> dict:
-    global _category_map_cache, _cache_timestamp
-
-    now = time.time()
-    if _category_map_cache is not None and _cache_timestamp is not None:
-        if now - _cache_timestamp < CATEGORY_CACHE_TTL:
-            return _category_map_cache
-
-    with _cache_lock:
-        if _category_map_cache is not None and _cache_timestamp is not None:
-            if now - _cache_timestamp < CATEGORY_CACHE_TTL:
-                return _category_map_cache
-        repo = RateCategoryRepository(conn)
-        _category_map_cache = repo.get_active_categories_map()
-        _cache_timestamp = time.time()
-
-    return _category_map_cache
+    return _cache.get(conn)
 
 def _retire_older_current(conn, source_id: int, currency_code: str, category_id):
     repo = RateObservationRepository(conn)

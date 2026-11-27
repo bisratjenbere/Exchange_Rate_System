@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from adapters.banks.hijra_new import ADAPTER, HijraAdapter
+from adapters.banks.hijra import ADAPTER, HijraAdapter
 from adapters.core.contract import IssueCode, ParseContext
 from adapters.core.protocol import is_universal_adapter, validate_adapter
 from adapters.transport.base import FetchKind

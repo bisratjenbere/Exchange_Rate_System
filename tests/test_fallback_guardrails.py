@@ -390,7 +390,7 @@ def test_zero_records_triggers_fallback_without_unique_violation(db):
     scheduler = Scheduler(adapter_registry=mock_registry)
     
     with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af), \
+         patch("adapters.banks.addis_fortune.get_adapter_for_key", return_value=mock_af), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = Mock()
         mock_http_instance.fetch.return_value = mock_response
@@ -484,7 +484,7 @@ def test_stale_feed_retained_when_no_fallback(db):
     scheduler = Scheduler(adapter_registry=mock_registry)
     
     with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
+         patch("adapters.banks.addis_fortune.get_adapter_for_key", return_value=None), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = Mock()
         mock_http_instance.fetch.return_value = mock_response

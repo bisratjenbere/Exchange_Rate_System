@@ -27,7 +27,7 @@ def test_addis_fortune_adapter_registered():
 
 def test_addis_fortune_parse_requires_slug():
     """addis_fortune parse() requires slug parameter."""
-    from adapters.addis_fortune.adapter import parse
+    from adapters.banks.addis_fortune import parse
     
     test_html = "<html><body>test</body></html>"
     
@@ -38,7 +38,7 @@ def test_addis_fortune_parse_requires_slug():
 
 def test_addis_fortune_parse_with_slug():
     """addis_fortune parse() works with slug parameter."""
-    from adapters.addis_fortune.adapter import parse
+    from adapters.banks.addis_fortune import parse
     
     test_html = "<html><body>test</body></html>"
     
@@ -147,7 +147,7 @@ def test_no_af_keys_in_database():
 
 def test_schema_fingerprint_with_slug():
     """schema_fingerprint() also accepts slug parameter."""
-    from adapters.addis_fortune.adapter import schema_fingerprint
+    from adapters.banks.addis_fortune import schema_fingerprint
     
     test_html = "<html><body>test</body></html>"
     

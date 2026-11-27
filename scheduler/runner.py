@@ -7,7 +7,8 @@ from datetime import date
 import requests
 
 from adapters.core.contract import ParseContext, Severity
-from adapters.addis_fortune.adapter import get_adapter_for_key
+from adapters.core.dates import business_date_now
+from adapters.banks.addis_fortune import get_adapter_for_key
 from pipeline.runs import (
     start_run, finish_run, recover_stuck_run, record_raw_capture, reap_stuck_runs,
 )
@@ -98,10 +99,9 @@ def _load_adapter(adapter_key: str):
                 return getattr(mod, "ADAPTER", mod)
             except ModuleNotFoundError:
                 pass
-        # also try adapters.banks.{name}_new (new-style modules)
         base = name.rsplit("_", 1)[0] if name.endswith(("_api", "_html", "_ajax", "_browser")) else name
         try:
-            mod = importlib.import_module(f"adapters.banks.{base}_new")
+            mod = importlib.import_module(f"adapters.banks.{base}")
             return getattr(mod, "ADAPTER", mod)
         except ModuleNotFoundError:
             pass
@@ -121,7 +121,7 @@ def _classify_error(exc: Exception) -> tuple:
 def _parse(adapter, raw_content: str, category: str = "UNKNOWN", adapter_config: dict = None) -> tuple[list, list, list]:
     ctx = ParseContext(
         category=category,
-        collection_date=date.today(),
+        collection_date=business_date_now(),
         source_id=0,
     )
     if adapter_config and hasattr(adapter, "slug"):

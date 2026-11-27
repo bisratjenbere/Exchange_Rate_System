@@ -457,7 +457,7 @@ def test_zero_records_without_fallback_marks_run_failed(db):
     scheduler = Scheduler(adapter_registry=mock_registry)
 
     with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
+         patch("adapters.banks.addis_fortune.get_adapter_for_key", return_value=None), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = MagicMock()
         mock_http_instance.fetch.return_value = mock_response

@@ -132,7 +132,7 @@ def test_extract_errors_and_warnings():
 
 def test_parse_with_actual_cbe_adapter():
     try:
-        from adapters.banks.cbe_new import ADAPTER
+        from adapters.banks.cbe import ADAPTER
         from infrastructure.adapter_registry_v2 import default_registry
         if default_registry.is_registered("cbe_api"):
             adapter = default_registry.get("cbe_api")

@@ -66,7 +66,7 @@ class TestFieldDetector:
         assert ("buying", "selling") in fields
 
     def test_awash_adapter_parsing(self):
-        from adapters.banks.awash_new import AwashAdapter, ADAPTER
+        from adapters.banks.awash import AwashAdapter, ADAPTER
         from adapters.core.contract import ParseContext
         from datetime import date
         import json

@@ -10,7 +10,7 @@ import pytest
 from pathlib import Path
 from datetime import date
 
-from adapters.banks.wegagen_new import ADAPTER
+from adapters.banks.wegagen import ADAPTER
 from adapters.core.contract import ParseContext
 
 # Path to golden snapshot
