@@ -1,14 +1,14 @@
-
-
 import time
 from dataclasses import dataclass
 
+from adapters.core.contract import ParseOutcome
 from domain.records import AdapterRecord
-from http_clients.http_client import RequestsHttpClient
+from domain.source import RateSource
 from infrastructure.adapter_registry_v2 import AdapterRegistryV2
 from infrastructure.rate_source_repository import RateSourceRepository
-from infrastructure.timeout_config import get_timeout_config
-from adapters.core.contract import ParseOutcome
+from scheduler.fetch_helpers import _check_schema
+from scheduler.fetch_strategy_resolver import resolve_fetch_strategy
+from scheduler.parsing import parse_with_adapter, extract_errors_and_warnings
 
 
 @dataclass(frozen=True)
@@ -28,87 +28,29 @@ class FetchResult:
 def fetch_parse_and_check_schema(
     conn,
     run_id: int,
-    source: dict,
+    source: RateSource,
     adapter_registry: AdapterRegistryV2,
     repo: RateSourceRepository,
     user_agent: str,
 ) -> FetchResult:
-   
-    from scheduler.runner import (
-        _build_url,
-        _check_schema,
-        _fetch_browser,
-        _fetch_with_retry,
-        _has_fetch_raw,
-    )
-    from scheduler.parsing import parse_with_adapter, extract_errors_and_warnings
-
-    adapter_key = source["adapter_key"]
-    source_url = source["source_url"]
-    ssl_verify = source["ssl_verify"]
+    adapter_key = source.adapter_key
+    source_url = source.source_url
+    ssl_verify = source.ssl_verify
 
     t0 = time.monotonic()
 
     adapter = adapter_registry.get(adapter_key)
-    
-    # Check fetch_kind attribute (FetchKind enum)
-    from adapters.transport.base import FetchKind
-    fetch_kind = getattr(adapter, "fetch_kind", None)
-
-    timeout_config = get_timeout_config(adapter_key)
-
-    if fetch_kind == FetchKind.BROWSER:
-        raw_content, http_status = _fetch_browser(
-            adapter, source_url, ssl_verify, user_agent
-        )
-    elif _has_fetch_raw(adapter):
-        # Adapter with fetch_raw method
-        raw_content, http_status = _fetch_with_retry(
-            lambda: adapter.fetch_raw(source_url, user_agent, ssl_verify)
-        )
-    else:
-        # Standard HTTP client fetch
-        needs_cloudflare_bypass = adapter_key in ["adib_api", "awash_ajax"]
-
-        http_client = RequestsHttpClient(
-            connect_timeout=timeout_config["connect_timeout"],
-            read_timeout=timeout_config["read_timeout"],
-            max_retries=timeout_config["max_retries"],
-            user_agent=user_agent,
-            use_cloudflare_bypass=needs_cloudflare_bypass
-        )
-
-        # Check for POST data and headers attributes
-        post_data = getattr(adapter, "post_data", None) or getattr(
-            adapter, "FETCH_POST_DATA", None
-        )
-        extra_headers = getattr(adapter, "headers", None) or getattr(
-            adapter, "FETCH_HEADERS", None
-        )
-        
-        response = _fetch_with_retry(
-            lambda: http_client.fetch(
-                _build_url(source_url, source["adapter_key"]),
-                ssl_verify=ssl_verify,
-                post_data=post_data,
-                headers=extra_headers
-            )
-        )
-        if not response.is_success():
-            raise RuntimeError(f"HTTP fetch failed: {response.error}")
-        raw_content = response.content
-        http_status = response.status_code
+    strategy = resolve_fetch_strategy(adapter, adapter_key)
+    raw_content, http_status = strategy.fetch(source_url, ssl_verify, user_agent)
 
     schema_changed = _check_schema(conn, run_id, source, adapter, raw_content, repo)
 
-    adapter_config = source.get("adapter_config")
-    
     outcome = parse_with_adapter(
         adapter=adapter,
         raw_content=raw_content,
         source=source,
-        collection_date=None,  # Uses today
-        adapter_config=adapter_config,
+        collection_date=None,
+        adapter_config=source.adapter_config,
     )
     
     # Extract records and errors/warnings for FetchResult

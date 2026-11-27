@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 import logging
+import threading
 import time
 
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
@@ -24,15 +25,11 @@ logger = logging.getLogger(__name__)
 
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
-# Batch size for savepoint optimization
-# Process this many records per savepoint to reduce DB round trips
-# Falls back to individual processing on batch error
 SAVEPOINT_BATCH_SIZE = 10
 
-# Query cache for category map (Phase 3E optimization)
-# Categories rarely change, so cache for 5 minutes to reduce DB queries
 _category_map_cache = None
 _cache_timestamp = None
+_cache_lock = threading.Lock()
 CATEGORY_CACHE_TTL = 300  # 5 minutes in seconds
 
 @dataclass
@@ -56,34 +53,18 @@ def ingest(conn, records: list, source_id: int, run_id: int,
 
     # Process in batches for better performance
     total_records = len(records)
-    batch_count = 0
-    individual_fallback_count = 0
-    
+
     for batch_start in range(0, total_records, SAVEPOINT_BATCH_SIZE):
         batch = records[batch_start:batch_start + SAVEPOINT_BATCH_SIZE]
-        batch_count += 1
-        
-        # Try optimistic batch processing first
-        batch_success = _process_batch_optimistic(
+
+        if not _process_batch_optimistic(
             conn, batch, source_id, run_id, fetched_at,
             category_map, result, is_fallback
-        )
-        
-        if not batch_success:
-            # Batch failed, fall back to individual processing with per-record savepoints
+        ):
             _process_batch_individually(
                 conn, batch, source_id, run_id, fetched_at,
                 category_map, result, is_fallback
             )
-            individual_fallback_count += len(batch)
-
-    # Log batch processing metrics
-    if total_records > 0:
-        batch_success_rate = ((total_records - individual_fallback_count) / total_records) * 100
-        logger.debug(
-            f"Ingestion: {total_records} records, {batch_count} batches, "
-            f"{individual_fallback_count} individual fallbacks ({batch_success_rate:.1f}% batched)"
-        )
 
     # Suspicious data check (unchanged)
     by_currency = {}
@@ -104,40 +85,31 @@ def _process_batch_optimistic(
     conn, batch, source_id, run_id, fetched_at,
     category_map, result, is_fallback
 ) -> bool:
-    """
-    Try to process batch with single savepoint.
-    Returns True if successful, False if any record failed.
-    """
-    # Generate unique savepoint name (avoid collisions in parallel processing)
     savepoint_name = f"_batch_{id(batch)}"
-    
+
     try:
         with conn.cursor() as cur:
             cur.execute(f"SAVEPOINT {savepoint_name}")
-        
-        # Process all records in batch
+
         for record in batch:
             _process_one(
                 conn, record, source_id, run_id, fetched_at,
                 category_map, result, is_fallback
             )
-        
-        # All succeeded, release savepoint
+
         with conn.cursor() as cur:
             cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
-        
+
         return True
-        
+
     except Exception:
-        # Any failure, rollback and signal fallback needed
         try:
             with conn.cursor() as cur:
                 cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
                 cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
         except Exception:
-            # Savepoint might already be released/rolled back
             pass
-        
+
         return False
 
 
@@ -145,10 +117,6 @@ def _process_batch_individually(
     conn, batch, source_id, run_id, fetched_at,
     category_map, result, is_fallback
 ):
-    """
-    Process batch with individual savepoints (original behavior).
-    Used as fallback when batch processing fails.
-    """
     for record in batch:
         with conn.cursor() as cur:
             cur.execute("SAVEPOINT _ingest_sp")
@@ -313,33 +281,28 @@ def _process_one(conn, record, source_id, run_id, fetched_at,
         result.accepted += 1
 
 def _load_category_map(conn) -> dict:
-    """Load mapping of category codes to IDs with 5-minute cache."""
     global _category_map_cache, _cache_timestamp
-    
+
     now = time.time()
-    
-    # Return cached value if still fresh
     if _category_map_cache is not None and _cache_timestamp is not None:
-        age = now - _cache_timestamp
-        if age < CATEGORY_CACHE_TTL:
-            logger.debug(f"Category map cache hit (age: {age:.1f}s)")
+        if now - _cache_timestamp < CATEGORY_CACHE_TTL:
             return _category_map_cache
-    
-    # Cache miss or expired - fetch from database
-    logger.info("Category map cache miss - fetching from database")
-    repo = RateCategoryRepository(conn)
-    _category_map_cache = repo.get_active_categories_map()
-    _cache_timestamp = now
-    
+
+    with _cache_lock:
+        if _category_map_cache is not None and _cache_timestamp is not None:
+            if now - _cache_timestamp < CATEGORY_CACHE_TTL:
+                return _category_map_cache
+        repo = RateCategoryRepository(conn)
+        _category_map_cache = repo.get_active_categories_map()
+        _cache_timestamp = time.time()
+
     return _category_map_cache
 
 def _retire_older_current(conn, source_id: int, currency_code: str, category_id):
-    """Retire older current observations using repository pattern."""
     repo = RateObservationRepository(conn)
     repo.retire_current_observations(source_id, currency_code, category_id)
 
 def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str, category_id, effective_date, is_fallback: bool = False):
-    """Retire prior fallback observations using repository pattern."""
     if effective_date is None:
         return
     repo = RateObservationRepository(conn)
@@ -347,7 +310,6 @@ def _retire_prior_fallback_observations(conn, source_id: int, currency_code: str
 
 def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
                                    category_id, effective_date, fetched_at: datetime):
-    """Dismiss change candidates superseded by newer publication using repository pattern."""
     repo = ChangeCandidateRepository(conn)
     repo.dismiss_superseded_by_date(
         source_id=source_id,
@@ -359,29 +321,26 @@ def _dismiss_superseded_candidates(conn, source_id: int, currency_code: str,
     )
 
 def _is_same_rate(conn, obs_id: int, prior_id: int) -> bool:
-    """Check if two observations have identical rates."""
     repo = RateObservationRepository(conn)
     return repo.compare_rates(obs_id, prior_id)
 
 def _get_rate_delta_percent(conn, existing_id: int, record) -> float:
-    """Calculate percentage change between existing observation and new record."""
     repo = RateObservationRepository(conn)
     row = repo.get_rates_for_comparison(existing_id)
     if not row:
         return 0.0
-    
+
     old_buy, old_sell = row[0], row[1]
     deltas = []
-    
+
     if old_buy is not None and record.buying_rate is not None and float(old_buy) > 0:
         deltas.append(abs(float(record.buying_rate) - float(old_buy)) / float(old_buy) * 100.0)
     if old_sell is not None and record.selling_rate is not None and float(old_sell) > 0:
         deltas.append(abs(float(record.selling_rate) - float(old_sell)) / float(old_sell) * 100.0)
-    
+
     return max(deltas) if deltas else 0.0
 
 def _get_active_observation(conn, source_id: int, currency_code: str, category_id):
-    """Get active observation using repository pattern."""
     repo = RateObservationRepository(conn)
     obs = repo.get_active_observation(source_id, currency_code, category_id)
     if obs:

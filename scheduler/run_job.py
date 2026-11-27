@@ -17,7 +17,8 @@ from scheduler.browser_pool import shutdown_browser_pool, get_browser_pool
 # Import database connection pool
 from db.manager import DatabaseManager
 
-from scheduler.parallel_runner import run_all_parallel
+from scheduler.runner import Scheduler
+from scheduler.parallel_runner import ParallelScheduler
 from scheduler.health import quick_health_check
 from scheduler.control import CollectionControl
 
@@ -81,7 +82,8 @@ def main():
 
         log.info("health check passed - starting collection")
 
-        results = run_all_parallel(conn, max_workers=5, timeout_budget=1500.0)
+        scheduler = ParallelScheduler(max_workers=5, timeout_budget=1500.0)
+        results = scheduler.run_all_parallel(conn)
     finally:
         conn.close()
         

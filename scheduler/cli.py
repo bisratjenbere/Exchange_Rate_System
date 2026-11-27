@@ -89,8 +89,8 @@ def test_adapter(adapter_key, dry_run, show_records):
                 sys.exit(1)
 
             source = sources[0]
-            source_url = source["source_url"]
-            ssl_verify = source["ssl_verify"]
+            source_url = source.source_url
+            ssl_verify = source.ssl_verify
 
             click.echo(f"Source URL: {source_url}")
             click.echo(f"SSL Verify: {ssl_verify}")
@@ -116,11 +116,10 @@ def test_adapter(adapter_key, dry_run, show_records):
             click.echo(f"✓ Fetched: {http_status} ({len(raw_content)} bytes)")
 
             click.echo("Parsing...")
-            category = source.get("default_category", "UNKNOWN")
+            category = source.default_category or "UNKNOWN"
 
-            # All adapters now return ParseOutcome - clean architecture only
             from adapters.core.protocol import ParseContext
-            ctx = ParseContext(source_id=0, category=category, url=source["url"])
+            ctx = ParseContext(source_id=source.id, category=category, collection_date=None)
             outcome = adapter.parse(raw_content, ctx)
             
             records = outcome.records
@@ -175,9 +174,9 @@ def list_sources(enabled_only, show_failures):
         click.echo("-" * 90)
 
         for source in sources:
-            enabled = "✓" if source.get("is_enabled", True) else "✗"
-            failures = source.get("consecutive_failures", 0)
-            last_success = source.get("last_success_at")
+            enabled = "✓" if source.is_enabled else "✗"
+            failures = source.consecutive_failures
+            last_success = source.last_success_at
 
             if last_success:
                 last_success_str = last_success.strftime("%Y-%m-%d %H:%M") if hasattr(last_success, 'strftime') else str(last_success)[:16]
@@ -191,10 +190,10 @@ def list_sources(enabled_only, show_failures):
             elif failures > 0:
                 failure_str = click.style(failure_str, fg='yellow')
 
-            click.echo(f"{source['id']:<4} {enabled:<8} {source['adapter_key']:<25} {failure_str:<10} {last_success_str:<20}")
+            click.echo(f"{source.id:<4} {enabled:<8} {source.adapter_key:<25} {failure_str:<10} {last_success_str:<20}")
 
             if show_failures and failures > 0:
-                last_error = source.get("last_failure_code", "unknown")
+                last_error = source.last_failure_code or "unknown"
                 click.echo(f"     └─ Last error: {last_error}")
 
         click.echo(f"\nTotal: {len(sources)} sources")

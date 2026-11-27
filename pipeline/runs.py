@@ -7,9 +7,7 @@ STUCK_RUN_THRESHOLD_MINUTES = 5
 
 def start_run(conn, source_id: int) -> int:
     repo = CollectionRunRepository(conn)
-    run_id = repo.start_run(source_id)
-    conn.commit()
-    return run_id
+    return repo.start_run(source_id)
 
 
 def finish_run(
@@ -42,7 +40,6 @@ def finish_run(
         is_fallback,
         fallback_adapter,
     )
-    conn.commit()
 
 
 def reap_stuck_runs(conn, threshold_minutes: int = 5) -> int:
@@ -69,7 +66,6 @@ def record_raw_capture(
 ):
     repo = CollectionRunRepository(conn)
     repo.insert_raw_capture(run_id, capture_reason, content_hash, storage_reference, retention_days)
-    conn.commit()
 
 
 def get_running_run(conn, source_id: int) -> Optional[int]:
