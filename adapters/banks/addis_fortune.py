@@ -75,10 +75,16 @@ class AddisFortuneAdapter:
             )
         
         # Extract JSON from wire:snapshot attribute
+        snapshot_json = snaps[0].get("wire:snapshot")
+        if snapshot_json is None:
+            return ParseOutcome.failed(
+                IssueCode.BAD_JSON,
+                "Missing wire:snapshot attribute in Livewire element"
+            )
+        
         try:
-            snapshot_json = snaps[0]["wire:snapshot"]
             snapshot = json.loads(snapshot_json)
-        except (json.JSONDecodeError, KeyError) as e:
+        except json.JSONDecodeError as e:
             return ParseOutcome.failed(
                 IssueCode.BAD_JSON,
                 f"Failed to parse wire:snapshot JSON: {e}"

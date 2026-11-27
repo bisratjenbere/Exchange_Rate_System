@@ -87,13 +87,11 @@ def get_timeout_config(adapter_key: str) -> dict:
     return BANK_TIMEOUT_CONFIG.get(adapter_key, BANK_TIMEOUT_CONFIG["default"])
 
 def get_all_slow_banks() -> list:
-    slow_banks = []
-    for adapter_key, config in BANK_TIMEOUT_CONFIG.items():
-        if adapter_key == "default":
-            continue
-        if config.get("read_timeout", 0) > 20.0:
-            slow_banks.append((adapter_key, config))
-    return slow_banks
+    return [
+        (adapter_key, config)
+        for adapter_key, config in BANK_TIMEOUT_CONFIG.items()
+        if adapter_key != "default" and config.get("read_timeout", 0) > 20.0
+    ]
 
 def get_summary() -> str:
     lines = [
@@ -101,21 +99,12 @@ def get_summary() -> str:
         ""
     ]
 
-    slow = []
-    medium = []
-    fast = []
-
-    for adapter_key, config in BANK_TIMEOUT_CONFIG.items():
-        if adapter_key == "default":
-            continue
-
-        read_timeout = config.get("read_timeout", 15.0)
-        if read_timeout >= 25.0:
-            slow.append((adapter_key, config))
-        elif read_timeout >= 15.0:
-            medium.append((adapter_key, config))
-        else:
-            fast.append((adapter_key, config))
+    # Categorize banks by timeout speed
+    non_default_items = [(k, v) for k, v in BANK_TIMEOUT_CONFIG.items() if k != "default"]
+    
+    slow = [(k, v) for k, v in non_default_items if v.get("read_timeout", 15.0) >= 25.0]
+    medium = [(k, v) for k, v in non_default_items if 15.0 <= v.get("read_timeout", 15.0) < 25.0]
+    fast = [(k, v) for k, v in non_default_items if v.get("read_timeout", 15.0) < 15.0]
 
     if slow:
         lines.append(f"SLOW BANKS ({len(slow)} banks, timeout ≥25s):")

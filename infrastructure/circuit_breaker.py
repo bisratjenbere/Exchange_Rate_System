@@ -141,17 +141,10 @@ class CircuitBreaker:
 
         lines = ["=== CIRCUIT BREAKER STATUS ===", ""]
 
-        open_circuits = []
-        half_open_circuits = []
-        closed_with_failures = []
-
-        for key, status in self._circuits.items():
-            if status.state == CircuitState.OPEN:
-                open_circuits.append((key, status))
-            elif status.state == CircuitState.HALF_OPEN:
-                half_open_circuits.append((key, status))
-            elif status.failure_count > 0:
-                closed_with_failures.append((key, status))
+        # Categorize circuits by state
+        open_circuits = [(k, s) for k, s in self._circuits.items() if s.state == CircuitState.OPEN]
+        half_open_circuits = [(k, s) for k, s in self._circuits.items() if s.state == CircuitState.HALF_OPEN]
+        closed_with_failures = [(k, s) for k, s in self._circuits.items() if s.state == CircuitState.CLOSED and s.failure_count > 0]
 
         if open_circuits:
             lines.append(f"OPEN CIRCUITS ({len(open_circuits)}):")
