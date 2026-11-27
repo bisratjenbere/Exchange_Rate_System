@@ -284,8 +284,9 @@ def test_ingest_empty_list(db):
     assert result.duplicates == 0
 
 from scheduler.runner import (
-    Scheduler, _load_adapter, _parse, _run_status, _classify_error,
+    Scheduler, _load_adapter, _parse, _classify_error,
 )
+from scheduler.extraction.recorder import _run_status
 
 def test_load_adapter_cbe():
     adapter = _load_adapter("cbe_api")
@@ -302,14 +303,14 @@ def test_load_adapter_unknown_raises():
 def test_parse_plain_list():
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = [_record()]
-    result = _parse(mock_adapter, "raw")
-    assert len(result) == 1
+    records, errors, warnings = _parse(mock_adapter, "raw")
+    assert len(records) == 1
 
 def test_parse_tuple_return():
     mock_adapter = MagicMock()
     mock_adapter.parse.return_value = ([_record()], ["err1"])
-    result = _parse(mock_adapter, "raw")
-    assert len(result) == 1
+    records, errors, warnings = _parse(mock_adapter, "raw")
+    assert len(records) == 1
 
 def test_run_status_all_accepted():
     r = IngestResult(accepted=5)
@@ -359,7 +360,7 @@ def test_run_source_success(db):
     
     scheduler = Scheduler(adapter_registry=mock_registry)
 
-    with patch("scheduler.runner._check_schema", return_value=False), \
+    with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = MagicMock()
         mock_http_instance.fetch.return_value = mock_response
@@ -405,7 +406,7 @@ def test_run_source_parse_failure(db):
     
     scheduler = Scheduler(adapter_registry=mock_registry)
 
-    with patch("scheduler.runner._check_schema"):
+    with patch("scheduler.fetch_helpers._check_schema"):
         result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "failed"
@@ -429,7 +430,7 @@ def test_run_all_iterates_enabled(db):
     
     scheduler = Scheduler(adapter_registry=mock_registry)
 
-    with patch("scheduler.runner._check_schema"), \
+    with patch("scheduler.fetch_helpers._check_schema"), \
          patch("scheduler.runner.time.sleep"):
         results = scheduler.run_all(db)
 
@@ -455,7 +456,7 @@ def test_zero_records_without_fallback_marks_run_failed(db):
     
     scheduler = Scheduler(adapter_registry=mock_registry)
 
-    with patch("scheduler.runner._check_schema", return_value=False), \
+    with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
          patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = MagicMock()
@@ -493,10 +494,10 @@ def test_inverted_category_spread_flagged_suspicious(db):
 
 from scheduler.runner import Scheduler
 from infrastructure.circuit_breaker import CircuitBreaker
+from infrastructure.fallback_policy import NoFallbackPolicy
 
 
 def _make_scheduler_source(conn, code):
-    """Seed a bank + source and return source_id."""
     bank_id = _make_bank(conn, code)
     src_id = _make_source(conn, bank_id, code.lower())
     conn.commit()
@@ -504,12 +505,12 @@ def _make_scheduler_source(conn, code):
 
 
 def test_scheduler_run_source_fallback_on_zero_records(db):
-    """When the primary adapter returns 0 records, Scheduler calls _try_af_fallback
-    and the result contains fallback='addis_fortune'."""
+    """When the primary adapter returns 0 records and fallback policy succeeds,
+    the result contains fallback='addis_fortune'."""
     src_id = _make_scheduler_source(db, "SCH1")
 
     mock_adapter = MagicMock()
-    mock_adapter.parse.return_value = []
+    mock_adapter.parse.return_value = MagicMock(records=[], issues=())
 
     mock_registry = MagicMock()
     mock_registry.get.return_value = mock_adapter
@@ -524,37 +525,36 @@ def test_scheduler_run_source_fallback_on_zero_records(db):
         "fallback": "addis_fortune",
     }
 
-    scheduler = Scheduler(adapter_registry=mock_registry)
+    mock_fallback = MagicMock()
+    mock_fallback.attempt.return_value = af_result
 
-    with patch("scheduler.runner._fetch", return_value=("<html>", 200)), \
-         patch("scheduler.runner._check_schema", return_value=False), \
-         patch("scheduler.runner._try_af_fallback", return_value=af_result) as mock_fallback, \
-         patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None):
+    scheduler = Scheduler(adapter_registry=mock_registry, fallback_policy=mock_fallback)
+
+    with patch("scheduler.fetch_helpers._check_schema", return_value=False):
         result = scheduler.run_source(db, src_id)
 
-    mock_fallback.assert_called_once()
+    mock_fallback.attempt.assert_called()
     assert result.get("fallback") == "addis_fortune"
 
 
 def test_scheduler_run_source_skipped_when_circuit_open(db):
-    """When circuit_breaker.should_attempt returns False and no AF fallback exists,
+    """When circuit_breaker.should_attempt returns False and no fallback exists,
     Scheduler.run_source returns status='skipped'."""
     src_id = _make_scheduler_source(db, "SCH2")
 
     mock_cb = MagicMock(spec=CircuitBreaker)
     mock_cb.should_attempt.return_value = False
 
-    scheduler = Scheduler(circuit_breaker=mock_cb)
+    scheduler = Scheduler(circuit_breaker=mock_cb, fallback_policy=NoFallbackPolicy())
 
-    with patch("scheduler.runner._try_af_fallback", return_value=None):
-        result = scheduler.run_source(db, src_id)
+    result = scheduler.run_source(db, src_id)
 
     assert result["status"] == "skipped"
     assert result.get("detail") == "circuit breaker open"
 
 
 def test_scheduler_run_source_records_failure_on_http_error(db):
-    """When the HTTP fetch raises, Scheduler calls circuit_breaker.record_failure."""
+    """When the adapter registry raises, circuit_breaker.record_failure is called."""
     src_id = _make_scheduler_source(db, "SCH3")
 
     mock_cb = MagicMock(spec=CircuitBreaker)
@@ -563,10 +563,13 @@ def test_scheduler_run_source_records_failure_on_http_error(db):
     mock_registry = MagicMock()
     mock_registry.get.side_effect = RuntimeError("HTTP fetch failed: connection refused")
 
-    scheduler = Scheduler(adapter_registry=mock_registry, circuit_breaker=mock_cb)
+    scheduler = Scheduler(
+        adapter_registry=mock_registry,
+        circuit_breaker=mock_cb,
+        fallback_policy=NoFallbackPolicy(),
+    )
 
-    with patch("scheduler.runner._try_af_fallback", return_value=None):
-        result = scheduler.run_source(db, src_id)
+    result = scheduler.run_source(db, src_id)
 
     mock_cb.record_failure.assert_called_once()
     assert result["status"] == "failed"

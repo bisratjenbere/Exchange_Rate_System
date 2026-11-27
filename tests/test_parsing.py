@@ -13,6 +13,18 @@ from scheduler.parsing import (
 )
 from adapters.core.contract import ParseContext, ParseOutcome, RowIssue, Severity, IssueCode
 from domain.records import AdapterRecord
+from domain.source import RateSource
+
+
+def _src(source_id=1, adapter_key="mock", default_category="cash") -> RateSource:
+    return RateSource(
+        id=source_id,
+        adapter_key=adapter_key,
+        source_url="https://example.com",
+        ssl_verify=True,
+        is_enabled=True,
+        default_category=default_category,
+    )
 
 
 class MockNewAdapter:
@@ -54,43 +66,24 @@ class MockNewAdapter:
 
 
 def test_create_parse_context():
-    """Test ParseContext creation from source"""
-    source = {
-        "source_id": 42,
-        "default_category": "cash",
-    }
-    
+    source = _src(source_id=42, default_category="cash")
     ctx = create_parse_context(source)
-    
     assert ctx.source_id == 42
     assert ctx.category == "cash"
     assert ctx.collection_date == date.today()
 
 
 def test_create_parse_context_with_custom_date():
-    """Test ParseContext with custom date"""
-    source = {
-        "source_id": 42,
-        "default_category": "transactional",
-    }
+    source = _src(source_id=42, default_category="transactional")
     custom_date = date(2026, 1, 1)
-    
     ctx = create_parse_context(source, custom_date)
-    
     assert ctx.collection_date == custom_date
 
 
 def test_parse_with_new_adapter_success():
-    """Test parsing with new adapter (success case)"""
     adapter = MockNewAdapter()
-    source = {
-        "source_id": 1,
-        "adapter_key": "mock_new",
-        "default_category": "cash",
-    }
-    
+    source = _src(source_id=1, adapter_key="mock_new", default_category="cash")
     outcome = parse_with_adapter(adapter, "test data", source)
-    
     assert isinstance(outcome, ParseOutcome)
     assert len(outcome.records) == 1
     assert len(outcome.issues) == 0
@@ -98,16 +91,9 @@ def test_parse_with_new_adapter_success():
 
 
 def test_parse_with_new_adapter_error():
-    """Test parsing with new adapter (error case)"""
     adapter = MockNewAdapter()
-    source = {
-        "source_id": 1,
-        "adapter_key": "mock_new",
-        "default_category": "cash",
-    }
-    
+    source = _src(source_id=1, adapter_key="mock_new", default_category="cash")
     outcome = parse_with_adapter(adapter, "ERROR data", source)
-    
     assert isinstance(outcome, ParseOutcome)
     assert len(outcome.records) == 0
     assert len(outcome.issues) == 1
@@ -145,48 +131,27 @@ def test_extract_errors_and_warnings():
 
 
 def test_parse_with_actual_cbe_adapter():
-    """Test parsing with actual CBE adapter"""
     try:
         from adapters.banks.cbe_new import ADAPTER
         from infrastructure.adapter_registry_v2 import default_registry
-        
-        # This is an integration test - only run if adapter registered
         if default_registry.is_registered("cbe_api"):
             adapter = default_registry.get("cbe_api")
-            source = {
-                "source_id": 1,
-                "adapter_key": "cbe_api",
-                "default_category": "cash",
-            }
-            
-            # Use empty payload (should return error outcome, not raise)
+            source = _src(source_id=1, adapter_key="cbe_api", default_category="cash")
             outcome = parse_with_adapter(adapter, "{}", source)
-            
             assert isinstance(outcome, ParseOutcome)
-            # Empty JSON should produce error or no records
             assert len(outcome.records) == 0 or len(outcome.issues) > 0
     except ImportError:
         pytest.skip("CBE adapter not available")
 
 
 def test_parse_with_clean_adapter():
-    """Test parsing with clean adapter from registry"""
     try:
         from infrastructure.adapter_registry_v2 import default_registry
-        
         if default_registry.is_registered("dashen_html"):
             adapter = default_registry.get("dashen_html")
-            source = {
-                "source_id": 1,
-                "adapter_key": "dashen_html",
-                "default_category": "cash",
-            }
-            
-            # Parse empty content (should handle gracefully)
+            source = _src(source_id=1, adapter_key="dashen_html", default_category="cash")
             outcome = parse_with_adapter(adapter, "", source)
-            
             assert isinstance(outcome, ParseOutcome)
-            # Clean adapter should return structured issues for empty content
-            assert len(outcome.issues) >= 0  # May have issues or not
+            assert len(outcome.issues) >= 0
     except ImportError:
         pytest.skip("Registry V2 not available")

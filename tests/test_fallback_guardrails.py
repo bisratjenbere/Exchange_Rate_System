@@ -9,7 +9,8 @@ from domain.records import AdapterRecord
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from pipeline.ingest import ingest
 from pipeline.runs import start_run, finish_run, reap_stuck_runs
-from scheduler.runner import _fetch_with_retry
+from scheduler.fetch_helpers import _fetch_with_retry
+from scheduler.extraction.recorder import _expire_stale_fallback_current
 
 @pytest.fixture(scope="module")
 def db():
@@ -388,7 +389,7 @@ def test_zero_records_triggers_fallback_without_unique_violation(db):
     
     scheduler = Scheduler(adapter_registry=mock_registry)
     
-    with patch("scheduler.runner._check_schema", return_value=False), \
+    with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
          patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=mock_af), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = Mock()
@@ -424,7 +425,6 @@ def test_scoped_stale_orphan_observation_pruning(db):
     ingest(db, [rec_old], source_id, run_old, is_fallback=False)
     finish_run(db, run_old, "success", records_found=1, records_accepted=1, is_fallback=False)
 
-    from scheduler.runner import _expire_stale_fallback_current
     _expire_stale_fallback_current(db, source_id)
 
     with db.cursor() as cur:
@@ -483,7 +483,7 @@ def test_stale_feed_retained_when_no_fallback(db):
     
     scheduler = Scheduler(adapter_registry=mock_registry)
     
-    with patch("scheduler.runner._check_schema", return_value=False), \
+    with patch("scheduler.fetch_helpers._check_schema", return_value=False), \
          patch("adapters.addis_fortune.adapter.get_adapter_for_key", return_value=None), \
          patch("scheduler.runner.RequestsHttpClient") as mock_http_class:
         mock_http_instance = Mock()

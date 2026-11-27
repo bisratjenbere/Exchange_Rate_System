@@ -18,6 +18,18 @@ from infrastructure.adapter_registry_v2 import default_registry
 from scheduler.parsing import parse_with_adapter
 from scheduler.extraction.fetcher import FetchResult
 from adapters.core.contract import ParseOutcome, Severity
+from domain.source import RateSource
+
+
+def _src(source_id=1, adapter_key="cbe_api", default_category="cash") -> RateSource:
+    return RateSource(
+        id=source_id,
+        adapter_key=adapter_key,
+        source_url="https://example.com",
+        ssl_verify=True,
+        is_enabled=True,
+        default_category=default_category,
+    )
 
 
 class TestNewAdaptersE2E:
@@ -54,12 +66,7 @@ class TestNewAdaptersE2E:
             golden = json.load(f)
         
         adapter = default_registry.get("cbe_api")
-        source = {
-            "source_id": 1,
-            "adapter_key": "cbe_api",
-            "default_category": "cash",
-        }
-        
+        source = _src(source_id=1, adapter_key="cbe_api")
         outcome = parse_with_adapter(adapter, golden["payload"], source)
         
         assert isinstance(outcome, ParseOutcome)
@@ -85,12 +92,7 @@ class TestNewAdaptersE2E:
             golden = json.load(f)
         
         adapter = default_registry.get("zemen_ajax")
-        source = {
-            "source_id": 29,
-            "adapter_key": "zemen_ajax",
-            "default_category": "cash",
-        }
-        
+        source = _src(source_id=29, adapter_key="zemen_ajax")
         outcome = parse_with_adapter(adapter, golden["payload"], source)
         
         assert isinstance(outcome, ParseOutcome)
@@ -110,12 +112,7 @@ class TestNewAdaptersE2E:
             golden = json.load(f)
         
         adapter = default_registry.get("wegagen_api")
-        source = {
-            "source_id": 27,
-            "adapter_key": "wegagen_api",
-            "default_category": "cash",
-        }
-        
+        source = _src(source_id=27, adapter_key="wegagen_api")
         outcome = parse_with_adapter(adapter, golden["payload"], source)
         
         assert isinstance(outcome, ParseOutcome)
@@ -133,20 +130,14 @@ class TestLegacyAdaptersE2E:
         
         # Verify no legacy adapters exist - all are clean
         stats = default_registry.get_stats()
-        assert stats['clean'] == 32, "Expected all 32 adapters to be clean"
-        assert stats['total'] == 32, "Expected 32 total adapters"
+        assert stats['clean'] == 33, "Expected all 33 adapters to be clean"
+        assert stats['total'] == 33, "Expected 33 total adapters"
     
     def test_legacy_adapter_parse_returns_outcome(self):
         """Test that all adapters return ParseOutcome (no legacy wrappers)"""
         # With 0 legacy adapters, test a clean adapter instead
         adapter = default_registry.get("cbe_api")
-        source = {
-            "source_id": 1,
-            "adapter_key": "cbe_api",
-            "default_category": "cash",
-        }
-        
-        # Empty content will cause error, but should return ParseOutcome
+        source = _src(source_id=1, adapter_key="cbe_api")
         outcome = parse_with_adapter(adapter, "", source)
         
         assert isinstance(outcome, ParseOutcome)
@@ -227,12 +218,7 @@ class TestErrorHandling:
     def test_malformed_json_produces_issues(self):
         """Test malformed JSON produces structured issues"""
         adapter = default_registry.get("cbe_api")
-        source = {
-            "source_id": 1,
-            "adapter_key": "cbe_api",
-            "default_category": "cash",
-        }
-        
+        source = _src(source_id=1, adapter_key="cbe_api")
         outcome = parse_with_adapter(adapter, "invalid json{", source)
         
         assert isinstance(outcome, ParseOutcome)
@@ -243,12 +229,7 @@ class TestErrorHandling:
     def test_empty_content_handled_gracefully(self):
         """Test empty content is handled gracefully"""
         adapter = default_registry.get("cbe_api")
-        source = {
-            "source_id": 1,
-            "adapter_key": "cbe_api",
-            "default_category": "cash",
-        }
-        
+        source = _src(source_id=1, adapter_key="cbe_api")
         outcome = parse_with_adapter(adapter, "", source)
         
         assert isinstance(outcome, ParseOutcome)
@@ -271,13 +252,7 @@ class TestPerformance:
             golden = json.load(f)
         
         adapter = default_registry.get("cbe_api")
-        source = {
-            "source_id": 1,
-            "adapter_key": "cbe_api",
-            "default_category": "cash",
-        }
-        
-        start = time.time()
+        source = _src(source_id=1, adapter_key="cbe_api")
         outcome = parse_with_adapter(adapter, golden["payload"], source)
         duration = time.time() - start
         
@@ -303,15 +278,15 @@ class TestRegistryStats:
         """Test registry provides accurate stats"""
         stats = default_registry.get_stats()
         
-        assert stats['total'] == 32
-        assert stats['clean'] == 32  # 32 clean adapters - 100% CLEAN! 🎉
-        assert stats['migration_progress'] == "32/32"
+        assert stats['total'] == 33
+        assert stats['clean'] == 33  # 33 clean adapters - 100% CLEAN! 🎉
+        assert stats['migration_progress'] == "33/33"
     
     def test_all_adapters_accessible(self):
         """Test all 32 adapters are accessible"""
         all_keys = default_registry.list_keys()
         
-        assert len(all_keys) == 32
+        assert len(all_keys) == 33
         
         # Test a few key adapters
         for key in ["cbe_api", "zemen_ajax", "wegagen_api", "dashen_html"]:

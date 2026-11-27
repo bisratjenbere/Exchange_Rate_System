@@ -121,8 +121,8 @@ class TestDefaultRegistry:
     def test_default_registry_has_all_adapters(self):
         keys = default_registry.list_keys()
 
-        # Registry V2 has 32 adapters (3 new + 29 legacy wrapped)
-        assert len(keys) == 32
+        # Registry V2 has 33 adapters
+        assert len(keys) == 33
 
     def test_default_registry_has_cbe(self):
         assert default_registry.is_registered("cbe_api")

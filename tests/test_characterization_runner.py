@@ -333,7 +333,7 @@ def test_schema_change_stores_raw_capture(db):
     
     # Verify fingerprint was updated
     source = repo.get_by_id(src_id)
-    assert source["schema_fingerprint"] == "new_fingerprint_456"
+    assert source.schema_fingerprint == "new_fingerprint_456"
 
 
 # ============================================================================
