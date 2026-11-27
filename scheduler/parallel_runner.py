@@ -9,6 +9,11 @@ from scheduler.runner import Scheduler
 from pipeline.runs import reap_stuck_runs
 from infrastructure.config import Config
 from infrastructure.rate_source_repository import RateSourceRepository
+from scheduler.workload_balancer import (
+    calculate_optimal_workers,
+    balance_workload_smart,
+    get_workload_summary
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,97 +58,111 @@ class ParallelScheduler(Scheduler):
 
         repo = RateSourceRepository(conn)
         sources = repo.get_enabled_sources()
+        
+        # Apply static priority first (critical banks)
         sources = self._prioritize_sources(sources)
+        
+        # === NEW: Dynamic worker calculation ===
+        optimal_workers = calculate_optimal_workers(sources)
+        logger.info(
+            f"Dynamic worker calculation: {optimal_workers} workers "
+            f"for {len(sources)} sources (was fixed at {self.max_workers})"
+        )
+        
+        # Use optimal workers (but respect manual override if set)
+        num_workers = min(optimal_workers, self.max_workers)
+        
+        # === NEW: Smart load balancing ===
+        worker_queues = balance_workload_smart(sources, num_workers)
+        
+        # Log workload distribution
+        summary = get_workload_summary(worker_queues)
+        logger.info(f"Workload distribution: {summary}")
 
         logger.info(
-            "Starting parallel collection: sources=%d, max_workers=%d, timeout_budget=%ds",
-            len(sources), self.max_workers, self.timeout_budget
+            f"Starting parallel collection: sources={len(sources)}, "
+            f"workers={num_workers}, timeout_budget={self.timeout_budget}s"
         )
 
         results = []
-        skipped = []
         start_time = time.time()
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_source = {
-                executor.submit(
-                    self._run_source_with_connection,
+        # === MODIFIED: Use pre-balanced queues ===
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit entire queue to each worker
+            future_to_worker = {}
+            
+            for worker_id, queue in enumerate(worker_queues):
+                if not queue:
+                    continue
+                
+                future = executor.submit(
+                    self._process_worker_queue,
                     dsn,
-                    source["id"]
-                ): source
-                for source in sources
-            }
-
+                    worker_id,
+                    queue
+                )
+                future_to_worker[future] = (worker_id, queue)
+            
+            # Wait for all workers to complete
             try:
                 for future in as_completed(
-                    future_to_source,
+                    future_to_worker.keys(),
                     timeout=self.timeout_budget
                 ):
-                    source = future_to_source[future]
-
+                    worker_id, queue = future_to_worker[future]
+                    
                     try:
-                        result = future.result()
-                        results.append(result)
-
+                        worker_results = future.result()
+                        results.extend(worker_results)
+                        
                         elapsed = time.time() - start_time
                         logger.info(
-                            "Completed %d/%d: source=%s status=%s elapsed=%.1fs",
-                            len(results),
-                            len(sources),
-                            source["adapter_key"],
-                            result.get("status"),
-                            elapsed
+                            f"Worker {worker_id} completed: {len(worker_results)} sources, "
+                            f"elapsed={elapsed:.1f}s"
                         )
-
-                        if elapsed > self.timeout_budget * 0.9:
-                            logger.warning(
-                                "Approaching timeout budget: elapsed=%.1fs budget=%ds",
-                                elapsed,
-                                self.timeout_budget
-                            )
-
+                        
                     except Exception as exc:
                         logger.error(
-                            "Collection exception: source=%s error=%s",
-                            source["adapter_key"],
-                            exc
+                            f"Worker {worker_id} exception: {exc}",
+                            exc_info=True
                         )
-                        results.append({
-                            "source_id": source["id"],
-                            "status": "error",
-                            "detail": str(exc),
-                            "error": "parallel_execution_error"
-                        })
-
+                        # Add error results for failed sources
+                        for source in queue:
+                            results.append({
+                                'source_id': source['id'],
+                                'status': 'error',
+                                'detail': str(exc),
+                                'error': 'worker_exception'
+                            })
+            
             except FutureTimeoutError:
                 elapsed = time.time() - start_time
                 logger.error(
-                    "Timeout budget exceeded: elapsed=%.1fs budget=%ds completed=%d/%d",
-                    elapsed,
-                    self.timeout_budget,
-                    len(results),
-                    len(sources)
+                    f"Timeout budget exceeded: elapsed={elapsed:.1f}s, "
+                    f"budget={self.timeout_budget}s, "
+                    f"completed={len(results)}/{len(sources)}"
                 )
-
-                for future, source in future_to_source.items():
+                
+                # Cancel pending workers
+                for future, (worker_id, queue) in future_to_worker.items():
                     if not future.done():
                         future.cancel()
-                        skipped.append({
-                            "source_id": source["id"],
-                            "status": "timeout",
-                            "detail": "timeout budget exceeded",
-                            "adapter_key": source["adapter_key"]
-                        })
-
-                results.extend(skipped)
+                        logger.warning(f"Cancelled worker {worker_id}")
+                        
+                        for source in queue:
+                            results.append({
+                                'source_id': source['id'],
+                                'status': 'timeout',
+                                'detail': 'timeout budget exceeded',
+                                'adapter_key': source['adapter_key']
+                            })
 
         elapsed = time.time() - start_time
         logger.info(
-            "Parallel collection finished: total=%d completed=%d skipped=%d elapsed=%.1fs",
-            len(sources),
-            len(results) - len(skipped),
-            len(skipped),
-            elapsed
+            f"Parallel collection finished: "
+            f"total={len(sources)}, completed={len(results)}, "
+            f"elapsed={elapsed:.1f}s"
         )
 
         return results
@@ -161,6 +180,53 @@ class ParallelScheduler(Scheduler):
 
             return result
 
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    
+    def _process_worker_queue(
+        self,
+        dsn: str,
+        worker_id: int,
+        queue: List[Dict]
+    ) -> List[Dict[str, Any]]:
+        """
+        Process a queue of sources sequentially in one worker.
+        
+        Each worker gets a pre-balanced queue of sources.
+        """
+        conn = None
+        results = []
+        
+        try:
+            conn = psycopg2.connect(dsn)
+            
+            for source in queue:
+                try:
+                    result = self.run_source(conn, source['id'])
+                    results.append(result)
+                    
+                    logger.debug(
+                        f"Worker {worker_id}: {source['adapter_key']} -> {result.get('status')}"
+                    )
+                    
+                except Exception as exc:
+                    logger.error(
+                        f"Worker {worker_id}: {source['adapter_key']} failed: {exc}",
+                        exc_info=True
+                    )
+                    results.append({
+                        'source_id': source['id'],
+                        'status': 'error',
+                        'detail': str(exc),
+                        'adapter_key': source['adapter_key']
+                    })
+            
+            return results
+            
         finally:
             if conn is not None:
                 try:

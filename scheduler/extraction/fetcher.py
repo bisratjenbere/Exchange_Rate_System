@@ -1,20 +1,4 @@
-"""
-Fetcher module - Adapter loading, HTTP fetching, and schema checking.
 
-Extracted from scheduler/runner.py lines 101-150.
-Handles:
-- Adapter loading from registry
-- HTTP content fetching (browser, fetch_raw, or HTTP client)
-- Schema fingerprint checking and raw capture
-- Parsing adapter output
-
-This module contains NO transaction logic (schema change stores raw but doesn't commit).
-
-Clean Architecture:
-- Uses AdapterRegistryV2 (all clean adapters)
-- Uses ParseOutcome for structured error handling
-- Returns FetchResult with records, errors, and warnings
-"""
 
 import time
 from dataclasses import dataclass
@@ -36,9 +20,9 @@ class FetchResult:
     duration_ms: int
     adapter_key: str
     adapter: object
-    errors: list = ()        # S1: Parse errors (previously discarded)
-    warnings: list = ()      # S1: Parse warnings
-    parse_outcome: ParseOutcome = None  # V2: Full structured outcome  
+    errors: list = ()        
+    warnings: list = ()      
+    parse_outcome: ParseOutcome = None 
 
 
 def fetch_parse_and_check_schema(
@@ -49,32 +33,7 @@ def fetch_parse_and_check_schema(
     repo: RateSourceRepository,
     user_agent: str,
 ) -> FetchResult:
-    """
-    Fetch content from source, parse it, and check schema changes.
-
-    Steps:
-    1. Load adapter from registry (V2: returns UniversalAdapter instance)
-    2. Determine fetch method (browser/fetch_raw/http_client)
-    3. Fetch content with retry logic
-    4. Check schema fingerprint (stores raw capture if changed, but doesn't commit)
-    5. Parse content into AdapterRecords (V2: uses ParseOutcome)
-
-    Args:
-        conn: Database connection
-        run_id: ID of the current collection run
-        source: Source record from database
-        adapter_registry: Registry containing all adapters (V2)
-        repo: Rate source repository for schema updates
-        user_agent: User agent string for HTTP requests
-
-    Returns:
-        FetchResult containing parsed records, raw content, and metadata
-
-    Transaction Behavior:
-        - Read-only except _check_schema which may store raw_capture (no commit)
-        - All database writes are deferred to caller
-    """
-    # Import helpers from runner.py (they're not extracted yet)
+   
     from scheduler.runner import (
         _build_url,
         _check_schema,
@@ -82,7 +41,6 @@ def fetch_parse_and_check_schema(
         _fetch_with_retry,
         _has_fetch_raw,
     )
-    # Import new parsing function
     from scheduler.parsing import parse_with_adapter, extract_errors_and_warnings
 
     adapter_key = source["adapter_key"]
