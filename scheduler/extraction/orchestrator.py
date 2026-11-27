@@ -1,8 +1,13 @@
+import logging
 import time
 from datetime import datetime, timezone
 
+import psycopg2
+import requests
+
 from domain.fallback import FallbackPolicy
 from pipeline.ingest import ingest
+from pipeline.runs import finish_run
 from infrastructure.rate_source_repository import RateSourceRepository
 from scheduler.extraction.input_parser import validate_source_and_check_circuit_breaker
 from scheduler.extraction.fetcher import fetch_parse_and_check_schema
@@ -13,6 +18,8 @@ from scheduler.extraction.recorder import (
     record_normal_success,
     record_exception,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def run_source_orchestrated(
@@ -25,11 +32,6 @@ def run_source_orchestrated(
     fallback_policy: FallbackPolicy,
     dry_run: bool = False,
 ) -> dict:
-    # PRESERVED BUGS:
-    # Bug #1: Double status in stale path (delegated to recorder)
-    # Bug #2: Dry-run orphaned runs (delegated to recorder)
-    # Bug #3: Silent raw capture failure (delegated to recorder)
-    # Bug #4: Invisible fallback expiration (delegated to recorder)
 
     preflight = validate_source_and_check_circuit_breaker(
         conn, source_id, circuit_breaker, user_agent, fallback_policy
@@ -131,7 +133,8 @@ def run_source_orchestrated(
             "schema_changed": recording_result.schema_changed,
         }
 
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError, KeyError,
+            requests.exceptions.RequestException, psycopg2.Error) as exc:
         error_code, error_summary = error_classifier.classify(exc)
         result = record_exception(
             conn, run_id, source_id, error_code, error_summary,
@@ -140,6 +143,6 @@ def run_source_orchestrated(
         )
         try:
             conn.commit()
-        except Exception:
+        except psycopg2.Error:
             conn.rollback()
         return result

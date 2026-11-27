@@ -1,3 +1,4 @@
+import logging
 import psycopg2.errors
 import time
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from infrastructure.rate_source_repository import RateSourceRepository
 from pipeline.ingest import ingest
 from pipeline.runs import finish_run, start_run
 from scheduler.extraction.recorder import _run_status, _reset_failure_counter, _expire_stale_fallback_current
+
+logger = logging.getLogger(__name__)
 
 
 class AddisFortuneFallbackPolicy:
@@ -81,9 +84,10 @@ class AddisFortuneFallbackPolicy:
                 "fallback": self.adapter_name,
             }
 
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, psycopg2.Error) as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             error_code, error_summary = default_classifier.classify(exc)
+            logger.warning("Fallback attempt failed for source_id=%s: %s", source_id, exc)
             try:
                 finish_run(
                     conn, run_id, "failed",
@@ -93,8 +97,8 @@ class AddisFortuneFallbackPolicy:
                     is_fallback=True,
                     fallback_adapter=self.adapter_name,
                 )
-            except Exception:
-                pass
+            except psycopg2.Error as finish_exc:
+                logger.warning("finish_run failed during fallback cleanup: %s", finish_exc)
             conn.rollback()
             return None
 

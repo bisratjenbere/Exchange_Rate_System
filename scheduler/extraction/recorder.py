@@ -284,7 +284,7 @@ def record_exception(
     if raw_content and error_code in ("parse_failure", "schema_change"):
         try:
             _store_raw_capture(conn, run_id, error_code, raw_content)
-        except Exception as exc:
+        except psycopg2.Error as exc:
             logger.warning("raw capture failed for run_id=%s: %s", run_id, exc)
 
     finish_run(

@@ -6,6 +6,8 @@ import logging
 import threading
 import time
 
+import psycopg2
+
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from domain.records import UNKNOWN_CATEGORY
 from pipeline.validate import validate
@@ -30,7 +32,7 @@ SAVEPOINT_BATCH_SIZE = 10
 _category_map_cache = None
 _cache_timestamp = None
 _cache_lock = threading.Lock()
-CATEGORY_CACHE_TTL = 300  # 5 minutes in seconds
+CATEGORY_CACHE_TTL = 300
 
 @dataclass
 class IngestResult:
@@ -107,9 +109,8 @@ def _process_batch_optimistic(
             with conn.cursor() as cur:
                 cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
                 cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
-        except Exception:
+        except psycopg2.Error:
             pass
-
         return False
 
 

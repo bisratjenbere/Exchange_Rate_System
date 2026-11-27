@@ -51,7 +51,7 @@ def main():
             timeout=30
         )
         log.info("database connection pool initialized: 2-10 connections")
-    except Exception as exc:
+    except (OSError, psycopg2.OperationalError) as exc:
         log.error("failed to initialize connection pool: %s", exc)
         sys.exit(1)
 
@@ -60,7 +60,7 @@ def main():
         try:
             conn = psycopg2.connect(dsn)
             break
-        except Exception as exc:
+        except psycopg2.OperationalError as exc:
             if attempt == 3:
                 log.error("db connect failed after %d attempts: %s", attempt, exc)
                 sys.exit(1)
@@ -96,14 +96,14 @@ def main():
                     pool_status.get('min_conn', 0),
                     pool_status.get('max_conn', 0)
                 )
-        except Exception:
+        except (OSError, RuntimeError):
             pass
         
         # Cleanup connection pool
         try:
             DatabaseManager.close_all()
             log.info("connection pool closed")
-        except Exception as exc:
+        except (OSError, psycopg2.OperationalError) as exc:
             log.warning("error closing connection pool: %s", exc)
         
         # Cleanup browser pool
@@ -116,7 +116,7 @@ def main():
                 metrics.get('hit_rate_percent', 0),
                 metrics.get('browsers_recycled', 0)
             )
-        except Exception:
+        except (OSError, RuntimeError):
             pass
         
         shutdown_browser_pool()

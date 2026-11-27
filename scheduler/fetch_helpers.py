@@ -26,7 +26,7 @@ def _fetch_with_retry(fetch_fn, retries: int = 1, backoff: float = 2.0):
                     time.sleep(backoff)
                     continue
             return res
-        except Exception as exc:
+        except (OSError, RuntimeError, requests.exceptions.RequestException) as exc:
             err = str(exc).lower()
             if attempt < retries and any(t in err for t in ("timeout", "timed out", "connection", "nameresolution")):
                 time.sleep(backoff)
@@ -67,15 +67,15 @@ def _fetch_browser(adapter, source_url: str, ssl_verify: bool, user_agent: str) 
             finally:
                 try:
                     context.close()
-                except Exception as e:
-                    logger.warning(f"Error closing browser context: {e}")
+                except (OSError, RuntimeError) as e:
+                    logger.warning("Error closing browser context: %s", e)
         finally:
             pool.release(browser)
 
     except ImportError:
         return adapter.fetch_raw(source_url, user_agent, ssl_verify)
-    except Exception as e:
-        logger.warning(f"Browser pool error: {e}, falling back to adapter fetch_raw")
+    except (OSError, RuntimeError) as e:
+        logger.warning("Browser pool error: %s, falling back to adapter fetch_raw", e)
         return adapter.fetch_raw(source_url, user_agent, ssl_verify)
 
 
