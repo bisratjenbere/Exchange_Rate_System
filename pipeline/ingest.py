@@ -20,6 +20,11 @@ from db.repositories.rate_category_repository import RateCategoryRepository
 
 MAX_INTRADAY_JUMP_PERCENT = 20.0
 
+# Batch size for savepoint optimization
+# Process this many records per savepoint to reduce DB round trips
+# Falls back to individual processing on batch error
+SAVEPOINT_BATCH_SIZE = 10
+
 @dataclass
 class IngestResult:
     accepted: int = 0
@@ -39,21 +44,40 @@ def ingest(conn, records: list, source_id: int, run_id: int,
     category_map = _load_category_map(conn)
     result = IngestResult()
 
-    for record in records:
-        with conn.cursor() as cur:
-            cur.execute("SAVEPOINT _ingest_sp")
-        try:
-            _process_one(conn, record, source_id, run_id, fetched_at,
-                         category_map, result, is_fallback=is_fallback)
-            with conn.cursor() as cur:
-                cur.execute("RELEASE SAVEPOINT _ingest_sp")
-        except Exception as exc:
-            with conn.cursor() as cur:
-                cur.execute("ROLLBACK TO SAVEPOINT _ingest_sp")
-                cur.execute("RELEASE SAVEPOINT _ingest_sp")
-            result.errors.append((record.source_currency_code, str(exc)))
-            result.rejected += 1
+    # Process in batches for better performance
+    total_records = len(records)
+    batch_count = 0
+    individual_fallback_count = 0
+    
+    for batch_start in range(0, total_records, SAVEPOINT_BATCH_SIZE):
+        batch = records[batch_start:batch_start + SAVEPOINT_BATCH_SIZE]
+        batch_count += 1
+        
+        # Try optimistic batch processing first
+        batch_success = _process_batch_optimistic(
+            conn, batch, source_id, run_id, fetched_at,
+            category_map, result, is_fallback
+        )
+        
+        if not batch_success:
+            # Batch failed, fall back to individual processing with per-record savepoints
+            _process_batch_individually(
+                conn, batch, source_id, run_id, fetched_at,
+                category_map, result, is_fallback
+            )
+            individual_fallback_count += len(batch)
 
+    # Log batch processing metrics
+    import logging
+    logger = logging.getLogger(__name__)
+    if total_records > 0:
+        batch_success_rate = ((total_records - individual_fallback_count) / total_records) * 100
+        logger.debug(
+            f"Ingestion: {total_records} records, {batch_count} batches, "
+            f"{individual_fallback_count} individual fallbacks ({batch_success_rate:.1f}% batched)"
+        )
+
+    # Suspicious data check (unchanged)
     by_currency = {}
     for record in records:
         by_currency.setdefault(record.source_currency_code, []).append(record)
@@ -66,6 +90,73 @@ def ingest(conn, records: list, source_id: int, run_id: int,
                 result.suspicious = True
 
     return result
+
+
+def _process_batch_optimistic(
+    conn, batch, source_id, run_id, fetched_at,
+    category_map, result, is_fallback
+) -> bool:
+    """
+    Try to process batch with single savepoint.
+    Returns True if successful, False if any record failed.
+    """
+    # Generate unique savepoint name (avoid collisions in parallel processing)
+    savepoint_name = f"_batch_{id(batch)}"
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SAVEPOINT {savepoint_name}")
+        
+        # Process all records in batch
+        for record in batch:
+            _process_one(
+                conn, record, source_id, run_id, fetched_at,
+                category_map, result, is_fallback
+            )
+        
+        # All succeeded, release savepoint
+        with conn.cursor() as cur:
+            cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        
+        return True
+        
+    except Exception:
+        # Any failure, rollback and signal fallback needed
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+                cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        except Exception:
+            # Savepoint might already be released/rolled back
+            pass
+        
+        return False
+
+
+def _process_batch_individually(
+    conn, batch, source_id, run_id, fetched_at,
+    category_map, result, is_fallback
+):
+    """
+    Process batch with individual savepoints (original behavior).
+    Used as fallback when batch processing fails.
+    """
+    for record in batch:
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT _ingest_sp")
+        try:
+            _process_one(
+                conn, record, source_id, run_id, fetched_at,
+                category_map, result, is_fallback
+            )
+            with conn.cursor() as cur:
+                cur.execute("RELEASE SAVEPOINT _ingest_sp")
+        except Exception as exc:
+            with conn.cursor() as cur:
+                cur.execute("ROLLBACK TO SAVEPOINT _ingest_sp")
+                cur.execute("RELEASE SAVEPOINT _ingest_sp")
+            result.errors.append((record.source_currency_code, str(exc)))
+            result.rejected += 1
 
 def _process_one(conn, record, source_id, run_id, fetched_at,
                  category_map, result, is_fallback: bool = False):
