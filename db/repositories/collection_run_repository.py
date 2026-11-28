@@ -186,6 +186,73 @@ class CollectionRunRepository(BaseRepository):
         row = self._fetch_one(query, (source_id,))
         return row[0] if row else None
 
+    def get_recent_runs_summary(self, since) -> Optional[tuple]:
+        """Return (total, succeeded) run counts since a given timestamp."""
+        query = """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status IN ('success', 'partial_success')) AS succeeded
+            FROM collection_run
+            WHERE started_at >= %s
+        """
+        return self._fetch_one(query, (since,))
+
+    def get_stuck_runs(self, since) -> Optional[tuple]:
+        """Return (count, source_ids) of runs stuck in 'running' state since threshold."""
+        query = """
+            SELECT COUNT(*), array_agg(source_id)
+            FROM collection_run
+            WHERE status = 'running' AND started_at < %s
+        """
+        return self._fetch_one(query, (since,))
+
+    def get_failed_runs_since(self, since) -> list:
+        """Return failed runs since a given timestamp."""
+        query = """
+            SELECT id, source_id, finished_at, error_code, error_summary
+            FROM collection_run
+            WHERE status = 'failed' AND finished_at >= %s
+            ORDER BY finished_at DESC
+        """
+        return self._fetch_all(query, (since,))
+
+    def get_schema_changes_since(self, since) -> list:
+        """Return schema change captures since a given timestamp."""
+        query = """
+            SELECT rc.id, cr.source_id, rc.captured_at, rc.content_hash
+            FROM raw_capture rc
+            JOIN collection_run cr ON cr.id = rc.collection_run_id
+            WHERE rc.capture_reason = 'schema_change' AND rc.captured_at >= %s
+            ORDER BY rc.captured_at DESC
+        """
+        return self._fetch_all(query, (since,))
+
+    def get_last_successful_run_per_source(self) -> list:
+        """Return the most recent successful run per enabled source."""
+        query = """
+            SELECT DISTINCT ON (cr.source_id)
+                cr.source_id, cr.id, cr.finished_at, cr.records_found
+            FROM collection_run cr
+            JOIN rate_source rs ON rs.id = cr.source_id
+            WHERE rs.is_enabled = TRUE
+              AND cr.status IN ('success', 'partial_success')
+              AND cr.finished_at IS NOT NULL
+            ORDER BY cr.source_id, cr.finished_at DESC
+        """
+        return self._fetch_all(query)
+
+    def get_recent_runs(self, limit: int = 10) -> list:
+        """Return the most recent collection runs across all sources."""
+        query = """
+            SELECT cr.started_at, rs.adapter_key, cr.status,
+                   cr.records_accepted, cr.duration_ms
+            FROM collection_run cr
+            JOIN rate_source rs ON rs.id = cr.source_id
+            ORDER BY cr.started_at DESC
+            LIMIT %s
+        """
+        return self._fetch_all(query, (limit,))
+
     def finish_stale_run(
         self,
         run_id: int,

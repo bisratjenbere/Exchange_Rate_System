@@ -73,6 +73,18 @@ class RateSourceRepository:
                 (fingerprint, source_id)
             )
 
+    def get_stale_sources(self, cutoff) -> list:
+        """Return enabled sources with no success since cutoff."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, adapter_key, last_success_at
+                   FROM rate_source
+                   WHERE is_enabled = TRUE
+                     AND (last_success_at IS NULL OR last_success_at < %s)""",
+                (cutoff,),
+            )
+            return cur.fetchall()
+
     def reset_failure_counter(self, source_id: int) -> None:
         with self.conn.cursor() as cur:
             cur.execute(

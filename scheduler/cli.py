@@ -13,6 +13,7 @@ from scheduler.control import CollectionControl
 from infrastructure.adapter_registry_v2 import default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
 from infrastructure.config import Config
+from db.repositories.collection_run_repository import CollectionRunRepository
 
 @click.group()
 def cli():
@@ -246,21 +247,12 @@ def status():
             click.secho("✓ Collection is RUNNING", fg='green')
 
         click.echo("\nRecent Activity (last 10 runs):")
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT cr.started_at, rs.adapter_key, cr.status,
-                       cr.records_accepted, cr.duration_ms
-                FROM collection_run cr
-                JOIN rate_source rs ON rs.id = cr.source_id
-                ORDER BY cr.started_at DESC
-                LIMIT 10
-            """)
-
-            for row in cur.fetchall():
-                started, adapter_key, status, accepted, duration = row
-                status_symbol = "✓" if status in ("success", "partial_success") else "✗"
-                duration_str = f"{duration}ms" if duration else "-"
-                click.echo(f"  {status_symbol} {started.strftime('%H:%M:%S')} {adapter_key:<25} {status:<15} {accepted or 0} records  {duration_str}")
+        rows = CollectionRunRepository(conn).get_recent_runs(limit=10)
+        for row in rows:
+            started, adapter_key, status, accepted, duration = row
+            status_symbol = "✓" if status in ("success", "partial_success") else "✗"
+            duration_str = f"{duration}ms" if duration else "-"
+            click.echo(f"  {status_symbol} {started.strftime('%H:%M:%S')} {adapter_key:<25} {status:<15} {accepted or 0} records  {duration_str}")
 
     finally:
         conn.close()

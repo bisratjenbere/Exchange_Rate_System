@@ -94,11 +94,10 @@ def _check_schema(conn, run_id: int, source: RateSource, adapter, raw_content: s
         if repo:
             repo.update_schema_fingerprint(source.id, current_fp)
         else:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE rate_source SET schema_fingerprint = %s WHERE id = %s",
-                    (str(current_fp) if current_fp is not None else None, source.id),
-                )
+            RateSourceRepository(conn).update_schema_fingerprint(
+                source.id,
+                str(current_fp) if current_fp is not None else None,
+            )
         return False
     if current_fp != stored_fp:
         _store_raw_capture(conn, run_id, "schema_change", raw_content)

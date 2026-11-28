@@ -4,6 +4,7 @@ from typing import Optional
 
 from infrastructure.adapter_registry_v2 import default_registry
 from infrastructure.rate_source_repository import RateSourceRepository
+from db.repositories.collection_run_repository import CollectionRunRepository
 
 def health_check(conn, detailed: bool = True) -> dict:
     checks = {}
@@ -97,84 +98,49 @@ def _check_adapters() -> dict:
 def _check_recent_success_rate(conn, hours: int = 24) -> dict:
     try:
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        row = CollectionRunRepository(conn).get_recent_runs_summary(since)
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE status IN ('success', 'partial_success')) as succeeded
-                FROM collection_run
-                WHERE started_at >= %s
-            """, (since,))
-            row = cur.fetchone()
-
-            if not row or row[0] == 0:
-                return {
-                    "status": "warn",
-                    "rate": None,
-                    "message": f"No runs in last {hours} hours",
-                    "period_hours": hours
-                }
-
-            total, succeeded = row
-            rate = succeeded / total if total > 0 else 0.0
-
-            if rate >= 0.8:
-                status = "ok"
-            elif rate >= 0.5:
-                status = "warn"
-            else:
-                status = "fail"
-
+        if not row or row[0] == 0:
             return {
-                "status": status,
-                "rate": round(rate, 3),
-                "succeeded": succeeded,
-                "total": total,
+                "status": "warn",
+                "rate": None,
+                "message": f"No runs in last {hours} hours",
                 "period_hours": hours
             }
-    except Exception as e:
+
+        total, succeeded = row
+        rate = succeeded / total if total > 0 else 0.0
+        status = "ok" if rate >= 0.8 else "warn" if rate >= 0.5 else "fail"
         return {
-            "status": "fail",
-            "error": str(e),
-            "message": "Could not check recent success rate"
+            "status": status,
+            "rate": round(rate, 3),
+            "succeeded": succeeded,
+            "total": total,
+            "period_hours": hours
         }
+    except Exception as e:
+        return {"status": "fail", "error": str(e), "message": "Could not check recent success rate"}
 
 def _check_stuck_runs(conn, threshold_hours: int = 4) -> dict:
     try:
         threshold = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+        row = CollectionRunRepository(conn).get_stuck_runs(threshold)
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT COUNT(*), array_agg(source_id)
-                FROM collection_run
-                WHERE status = 'running'
-                  AND started_at < %s
-            """, (threshold,))
-            row = cur.fetchone()
+        count = row[0] if row else 0
+        source_ids = row[1] if row and row[1] else []
 
-            count = row[0] if row else 0
-            source_ids = row[1] if row and row[1] else []
+        if count == 0:
+            return {"status": "ok", "count": 0}
 
-            if count == 0:
-                return {
-                    "status": "ok",
-                    "count": 0
-                }
-
-            return {
-                "status": "warn",
-                "count": count,
-                "source_ids": source_ids,
-                "message": f"{count} stuck run(s) detected",
-                "threshold_hours": threshold_hours
-            }
-    except Exception as e:
         return {
             "status": "warn",
-            "error": str(e),
-            "message": "Could not check for stuck runs"
+            "count": count,
+            "source_ids": source_ids,
+            "message": f"{count} stuck run(s) detected",
+            "threshold_hours": threshold_hours
         }
+    except Exception as e:
+        return {"status": "warn", "error": str(e), "message": "Could not check for stuck runs"}
 
 def quick_health_check(conn) -> bool:
     result = health_check(conn, detailed=False)
