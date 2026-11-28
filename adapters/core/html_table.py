@@ -38,10 +38,12 @@ class TableSpec:
     required: tuple[str, ...] = ("currency", "buy", "sell")
     per_units: Mapping[str, int] = field(default_factory=dict)
     expected_categories: tuple[str, ...] = ()
+    header_row: int = 0  # Which <tr> index contains the column headers
 
 
 def find_table_by_headers(soup: BeautifulSoup, headers: Mapping[str, tuple[str, ...]], 
-                          required: tuple[str, ...]) -> tuple | None:
+                          required: tuple[str, ...],
+                          required_header_row: int = 0) -> tuple | None:
     """
     Find first table matching header requirements.
     
@@ -60,12 +62,15 @@ def find_table_by_headers(soup: BeautifulSoup, headers: Mapping[str, tuple[str, 
         → Returns {" currency": 0, "buy": 1}
     """
     for table in soup.find_all("table"):
-        first_row = table.find("tr")
-        if not first_row:
+        all_rows = table.find_all("tr")
+        if not all_rows:
             continue
-        
+
+        header_row_idx = required_header_row if required_header_row < len(all_rows) else 0
+        header_tr = all_rows[header_row_idx]
+
         # Extract header cells, normalize to lowercase
-        cells = first_row.find_all(["th", "td"])
+        cells = header_tr.find_all(["th", "td"])
         header_texts = [
             " ".join(c.get_text(" ", strip=True).lower().split())
             for c in cells
@@ -80,7 +85,7 @@ def find_table_by_headers(soup: BeautifulSoup, headers: Mapping[str, tuple[str, 
                     break
         
         if all(req in column_map for req in required):
-            return table, column_map, header_texts
+            return table, column_map, header_texts, header_row_idx
     
     return None
 
@@ -115,7 +120,9 @@ class HtmlTableAdapter:
             return ParseOutcome.failed(IssueCode.EMPTY_PAYLOAD, "empty HTML body")
         
         soup = BeautifulSoup(raw, "lxml")
-        found = find_table_by_headers(soup, self.spec.headers, self.spec.required)
+        found = find_table_by_headers(
+            soup, self.spec.headers, self.spec.required, self.spec.header_row
+        )
         
         if not found:
             return ParseOutcome.failed(
@@ -123,19 +130,29 @@ class HtmlTableAdapter:
                 f"no table with headers: {', '.join(self.spec.required)}"
             )
         
-        table, col_map, header_cells = found
+        table, col_map, header_cells, header_row_idx = found
         
         records = []
         issues = []
         rows_seen = 0
         
-        # Parse data rows
-        for row_idx, row in enumerate(table.find_all("tr")[1:], start=1):  # Skip header
+        # Parse data rows — skip everything up to and including the header row
+        for row_idx, row in enumerate(table.find_all("tr")[header_row_idx + 1:], start=1):
             cells = [c.get_text(" ", strip=True) for c in row.find_all(["td", "th"])]
             
             if not cells or len(cells) <= max(col_map.values()):
                 # Empty row or too few cells
                 continue
+
+            # Stop at a section sub-header row (first cell is text, not a number or currency)
+            # Detected when: first data cell doesn't look like a rate AND second cell is empty/text
+            currency_text = cells[col_map["currency"]].strip()
+            buy_text = cells[col_map["buy"]].strip()
+            if currency_text and not buy_text.replace(".", "").replace(",", "").isdigit():
+                from adapters.core.currency import normalize_currency as _nc
+                if _nc(currency_text) is None and buy_text == "":
+                    # Sub-header row like "Transaction Rates" — stop cash section
+                    break
             
             rows_seen += 1
             row_ref = f"row {row_idx}"

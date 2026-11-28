@@ -21,6 +21,7 @@ SPEC = TableSpec(
         "sell": ("selling", "cash selling", "we sell"),
     },
     required=("currency", "buy", "sell"),
+    header_row=1,
 )
 
 ADAPTER = HtmlTableAdapter(SPEC)

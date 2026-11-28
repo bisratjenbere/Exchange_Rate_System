@@ -34,6 +34,7 @@ _ALIASES = {
     # CNY
     "CNY": "CNY",
     "CHINESE YUAN": "CNY",
+    "CHINESE (YUAN)": "CNY",
     "YUAN": "CNY",
     "¥": "CNY",
     "CHINA YUAN": "CNY",
@@ -152,6 +153,7 @@ def normalize_currency(text: str) -> str | None:
     
     Rules:
     - Uppercase, strip whitespace, collapse multiple spaces
+    - Handle "CODE (Full Name)" format (e.g., "USD (US Dollar)" → "USD")
     - Check alias table first
     - If not in aliases and looks like ISO code (3 letters), accept as-is
     - Otherwise return None (unknown currency)
@@ -159,7 +161,7 @@ def normalize_currency(text: str) -> str | None:
     Examples:
         normalize_currency("US Dollar") → "USD"
         normalize_currency("usd") → "USD"
-        normalize_currency("US$") → "USD"
+        normalize_currency("USD (US Dollar)") → "USD"
         normalize_currency("XYZ") → "XYZ" (3 letters, assumed valid)
         normalize_currency("JUNK123") → None
         normalize_currency("") → None
@@ -169,6 +171,12 @@ def normalize_currency(text: str) -> str | None:
     
     # Normalize: uppercase, strip, collapse whitespace
     key = " ".join(text.upper().split())
+
+    # Handle "CODE (Full Name)" format — e.g. "USD (US Dollar)"
+    if "(" in key:
+        prefix = key.split("(")[0].strip()
+        if len(prefix) == 3 and prefix.isalpha():
+            return prefix
     
     # Check alias table
     if key in _ALIASES:

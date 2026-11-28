@@ -14,13 +14,14 @@ from adapters.transport.base import FetchKind
 
 SPEC = TableSpec(
     key="boa_html",
-    url="https://www.bankofabyssinia.com/exchange-rates/",
+    url="https://www.bankofabyssinia.com/",
     headers={
-        "currency": ("currency", "code", "symbol"),
-        "buy": ("buying", "cash buying", "we buy"),
-        "sell": ("selling", "cash selling", "we sell"),
+        "currency": ("currency type", "currency", "code", "symbol"),
+        "buy": ("cash buying rate", "buying", "cash buying", "we buy"),
+        "sell": ("cash selling rate", "selling", "cash selling", "we sell"),
     },
     required=("currency", "buy", "sell"),
+    header_row=2,
 )
 
 ADAPTER = HtmlTableAdapter(SPEC)
