@@ -505,6 +505,49 @@ def get_pending_review_observations(conn) -> list:
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
+def get_usd_matrix_data(conn, category: str) -> tuple:
+    """
+    Fetch USD rate rows and collection run rows for the USD matrix view.
+
+    Returns:
+        (rate_rows, run_rows) — raw tuples ready for the template.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT ON (rs.id, o.effective_date)
+                rs.id   AS source_id,
+                b.name  AS bank_name,
+                b.code  AS bank_code,
+                o.effective_date,
+                o.buying_rate,
+                o.selling_rate
+            FROM rate_observation o
+            JOIN rate_source rs ON rs.id = o.source_id
+            JOIN bank b ON b.id = rs.bank_id
+            JOIN rate_category rc ON rc.id = o.category_id
+            WHERE o.validation_status != 'rejected'
+              AND o.identity_status != 'ambiguous'
+              AND o.category_id IS NOT NULL
+              AND rs.is_enabled = TRUE
+              AND o.source_currency_code = 'USD'
+              AND rc.code = %s
+              AND o.effective_date >= CURRENT_DATE - 31
+            ORDER BY rs.id, o.effective_date, o.buying_rate DESC NULLS LAST
+        """, (category,))
+        rate_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT cr.source_id, cr.started_at::date AS run_date,
+                   bool_or(cr.status = 'success') AS had_success
+            FROM collection_run cr
+            WHERE cr.started_at >= CURRENT_DATE - 31
+            GROUP BY cr.source_id, cr.started_at::date
+        """)
+        run_rows = cur.fetchall()
+
+    return rate_rows, run_rows
+
+
 def get_observation_with_warnings(conn, logical_key: str) -> Optional[dict]:
     with conn.cursor() as cur:
         cur.execute(

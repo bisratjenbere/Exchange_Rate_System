@@ -553,6 +553,58 @@ class RateObservationRepository(BaseRepository):
         row = self._fetch_one(query, (obs_id_1, obs_id_2))
         return bool(row and row[0])
 
+    def get_observation_for_review(
+        self, observation_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get fields needed for the review/approve workflow.
+
+        Returns:
+            Dict with source_id, source_currency_code, category_id, effective_date
+            or None if not found.
+        """
+        query = """
+            SELECT source_id, source_currency_code, category_id, effective_date
+            FROM rate_observation
+            WHERE id = %s
+        """
+        row = self._fetch_one(query, (observation_id,))
+        if row is None:
+            return None
+        return self._row_to_dict(
+            row, ['source_id', 'source_currency_code', 'category_id', 'effective_date']
+        )
+
+    def approve_observation(self, observation_id: int, promote: bool) -> None:
+        """
+        Approve a pending-review observation.
+
+        If promote=True: mark as is_current=TRUE and set review status.
+        If promote=False: keep is_current=FALSE but still mark reviewed.
+        """
+        if promote:
+            query = """
+                UPDATE rate_observation
+                SET is_current = TRUE, change_review_status = 'new_publication'
+                WHERE id = %s
+            """
+        else:
+            query = """
+                UPDATE rate_observation
+                SET is_current = FALSE, change_review_status = 'new_publication'
+                WHERE id = %s
+            """
+        self._execute(query, (observation_id,))
+
+    def dismiss_observations(self, observation_ids: list) -> None:
+        """Mark a batch of observations as dismissed."""
+        query = """
+            UPDATE rate_observation
+            SET change_review_status = 'dismissed'
+            WHERE id = ANY(%s)
+        """
+        self._execute(query, (observation_ids,))
+
     def has_fresh_observation_today(self, source_id: int) -> bool:
         """
         Return True if this source already has a non-fallback is_current observation

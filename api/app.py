@@ -28,8 +28,10 @@ from trusted_view.query import (
     get_history_by_currency,
     get_search_suggestions,
     get_pending_review_observations,
+    get_usd_matrix_data,
     MAJOR_CURRENCIES,
 )
+from db.repositories.rate_observation_repository import RateObservationRepository
 
 import infrastructure.env
 
@@ -328,63 +330,35 @@ def review_decide():
     has_error = False
     try:
         conn = _conn()
-        with conn.cursor() as cur:
-            if decision == "approve":
-                for oid in obs_ids:
-                    cur.execute("""
-                        SELECT source_id, source_currency_code, category_id, effective_date
-                        FROM rate_observation WHERE id = %s
-                    """, (oid,))
-                    cand_row = cur.fetchone()
-                    if not cand_row:
-                        continue
-                    sid, cur_code, cat_id, cand_eff_date = cand_row
+        repo = RateObservationRepository(conn)
 
-                    cur.execute("""
-                        SELECT id, effective_date
-                        FROM rate_observation
-                        WHERE source_id = %s
-                          AND source_currency_code = %s
-                          AND category_id IS NOT DISTINCT FROM %s
-                          AND is_current = TRUE
-                        LIMIT 1
-                    """, (sid, cur_code, cat_id))
-                    active_row = cur.fetchone()
+        if decision == "approve":
+            for oid in obs_ids:
+                obs = repo.get_observation_for_review(oid)
+                if not obs:
+                    continue
 
-                    promote = True
-                    if active_row:
-                        active_id, active_eff_date = active_row
-                        if active_eff_date is not None and cand_eff_date is not None and cand_eff_date < active_eff_date:
-                            promote = False
-                        elif active_eff_date is not None and cand_eff_date is None:
-                            promote = False
+                active = repo.get_active_observation(
+                    obs['source_id'], obs['source_currency_code'], obs['category_id']
+                )
 
-                    if promote:
-                        cur.execute("""
-                            UPDATE rate_observation
-                            SET is_current = FALSE
-                            WHERE source_id = %s
-                              AND source_currency_code = %s
-                              AND category_id IS NOT DISTINCT FROM %s
-                              AND is_current = TRUE
-                        """, (sid, cur_code, cat_id))
-                        cur.execute("""
-                            UPDATE rate_observation
-                            SET is_current = TRUE, change_review_status = 'new_publication'
-                            WHERE id = %s
-                        """, (oid,))
-                    else:
-                        cur.execute("""
-                            UPDATE rate_observation
-                            SET is_current = FALSE, change_review_status = 'new_publication'
-                            WHERE id = %s
-                        """, (oid,))
-            else:
-                cur.execute("""
-                    UPDATE rate_observation
-                    SET change_review_status = 'dismissed'
-                    WHERE id = ANY(%s)
-                """, (obs_ids,))
+                promote = True
+                if active:
+                    active_eff = active['effective_date']
+                    cand_eff = obs['effective_date']
+                    if active_eff is not None and cand_eff is not None and cand_eff < active_eff:
+                        promote = False
+                    elif active_eff is not None and cand_eff is None:
+                        promote = False
+
+                if promote:
+                    repo.retire_current_observations(
+                        obs['source_id'], obs['source_currency_code'], obs['category_id']
+                    )
+                repo.approve_observation(oid, promote=promote)
+        else:
+            repo.dismiss_observations(obs_ids)
+
         conn.commit()
     except Exception as exc:
         has_error = True
@@ -409,43 +383,11 @@ def usd_matrix():
     has_error = False
     try:
         conn = _conn()
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT DISTINCT ON (rs.id, o.effective_date)
-                    rs.id   AS source_id,
-                    b.name  AS bank_name,
-                    b.code  AS bank_code,
-                    o.effective_date,
-                    o.buying_rate,
-                    o.selling_rate
-                FROM rate_observation o
-                JOIN rate_source rs ON rs.id = o.source_id
-                JOIN bank b ON b.id = rs.bank_id
-                JOIN rate_category rc ON rc.id = o.category_id
-                WHERE o.validation_status != 'rejected'
-                  AND o.identity_status != 'ambiguous'
-                  AND o.category_id IS NOT NULL
-                  AND rs.is_enabled = TRUE
-                  AND o.source_currency_code = 'USD'
-                  AND rc.code = %s
-                  AND o.effective_date >= CURRENT_DATE - 31
-                ORDER BY rs.id, o.effective_date, o.buying_rate DESC NULLS LAST
-            """, (category,))
-            rate_rows = cur.fetchall()
-
-            cur.execute("""
-                SELECT cr.source_id, cr.started_at::date AS run_date,
-                       bool_or(cr.status = 'success') AS had_success
-                FROM collection_run cr
-                WHERE cr.started_at >= CURRENT_DATE - 31
-                GROUP BY cr.source_id, cr.started_at::date
-            """)
-            run_rows = cur.fetchall()
+        rate_rows, run_rows = get_usd_matrix_data(conn, category)
     except Exception as exc:
         has_error = True
         logger.error("GET /usd failed: %s", exc)
-        rate_rows = []
-        run_rows = []
+        rate_rows, run_rows = [], []
     finally:
         if conn:
             _put(conn, error=has_error)
