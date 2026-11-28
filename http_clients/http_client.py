@@ -114,6 +114,8 @@ class RequestsHttpClient(HttpClient):
         self, url: str, ssl_verify: bool, post_data: Optional[dict], req_headers: dict
     ) -> HttpResponse:
         last_error = None
+        last_exc = None  # Track the last exception for retry delay calculation
+        
         for attempt in range(self.max_retries + 1):
             try:
                 response = self._dispatch(url, ssl_verify, post_data, req_headers)
@@ -129,19 +131,24 @@ class RequestsHttpClient(HttpClient):
                 )
 
             except requests.ConnectTimeout as exc:
+                last_exc = exc
                 last_error = f"Connect timeout after {self.connect_timeout}s: {exc}"
             except requests.ReadTimeout as exc:
+                last_exc = exc
                 last_error = f"Read timeout after {self.read_timeout}s: {exc}"
             except requests.Timeout as exc:
+                last_exc = exc
                 last_error = f"Timeout: {exc}"
             except requests.ConnectionError as exc:
+                last_exc = exc
                 last_error = f"Connection error: {exc}"
             except requests.RequestException as exc:
+                last_exc = exc
                 last_error = f"Request failed: {exc}"
                 break
 
-            if attempt < self.max_retries:
-                delay = self.retry_delay * 3 if isinstance(exc, requests.ReadTimeout) else self.retry_delay * (2 ** attempt)
+            if attempt < self.max_retries and last_exc:
+                delay = self.retry_delay * 3 if isinstance(last_exc, requests.ReadTimeout) else self.retry_delay * (2 ** attempt)
                 time.sleep(delay)
 
         return HttpResponse(content="", status_code=0, url=url, error=last_error)

@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from adapters.banks.addis_fortune import AF_SLUG_MAP, AddisFortuneAdapter
+from adapters.core.contract import ParseContext
+from adapters.core.dates import business_date_now
 from domain.fallback import FallbackPolicy
 from infrastructure.error_classifier import default_classifier
 from infrastructure.rate_source_repository import RateSourceRepository
@@ -44,7 +46,15 @@ class AddisFortuneFallbackPolicy:
             raw_content, http_status = af_adapter.fetch_raw(
                 af_adapter.get_source_url(), user_agent, ssl_verify=True
             )
-            result_obj = af_adapter.parse(raw_content)
+            
+            # Create ParseContext for the adapter
+            ctx = ParseContext(
+                category="cash",
+                collection_date=business_date_now(),
+                source_id=source_id
+            )
+            
+            result_obj = af_adapter.parse(raw_content, ctx)
             records = result_obj.records if hasattr(result_obj, "records") else result_obj
 
             fetched_at = datetime.now(timezone.utc)
