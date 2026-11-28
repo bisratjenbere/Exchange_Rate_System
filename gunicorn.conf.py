@@ -30,6 +30,10 @@ def post_fork(server, worker):
     try:
         from api.app import _reset_pool
         _reset_pool()
-    except Exception:
-        pass
+    except ImportError as exc:
+        server.log.warning("post_fork: could not import _reset_pool: %s", exc)
+    except AttributeError as exc:
+        server.log.warning("post_fork: _reset_pool not found: %s", exc)
+    except RuntimeError as exc:
+        server.log.warning("post_fork: _reset_pool failed: %s", exc)
 

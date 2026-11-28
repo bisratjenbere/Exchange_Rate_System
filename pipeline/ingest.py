@@ -7,6 +7,7 @@ import threading
 import time
 
 import psycopg2
+from psycopg2 import sql
 
 from domain.enums import ValidationStatus, IdentityStatus, ChangeReviewStatus
 from domain.records import UNKNOWN_CATEGORY
@@ -33,10 +34,18 @@ CATEGORY_CACHE_TTL = 300
 
 
 class _CategoryCache:
+    _instance: "_CategoryCache | None" = None
+
     def __init__(self):
         self._data = None
         self._timestamp = None
         self._lock = threading.Lock()
+
+    @classmethod
+    def instance(cls) -> "_CategoryCache":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
 
     def get(self, conn) -> dict:
         now = time.time()
@@ -58,7 +67,7 @@ class _CategoryCache:
             self._timestamp = None
 
 
-_cache = _CategoryCache()
+_cache = _CategoryCache.instance()
 
 @dataclass
 class IngestResult:
@@ -113,11 +122,13 @@ def _process_batch_optimistic(
     conn, batch, source_id, run_id, fetched_at,
     category_map, result, is_fallback
 ) -> bool:
-    savepoint_name = f"_batch_{id(batch)}"
+    # Generate savepoint name from batch object ID (always a valid identifier)
+    savepoint_name = f"batch_{id(batch)}"
 
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SAVEPOINT {savepoint_name}")
+            # Use psycopg2.sql for safe identifier quoting (prevents SQL injection warnings)
+            cur.execute(sql.SQL("SAVEPOINT {}").format(sql.Identifier(savepoint_name)))
 
         for record in batch:
             _process_one(
@@ -126,15 +137,15 @@ def _process_batch_optimistic(
             )
 
         with conn.cursor() as cur:
-            cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            cur.execute(sql.SQL("RELEASE SAVEPOINT {}").format(sql.Identifier(savepoint_name)))
 
         return True
 
     except Exception:
         try:
             with conn.cursor() as cur:
-                cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
-                cur.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+                cur.execute(sql.SQL("ROLLBACK TO SAVEPOINT {}").format(sql.Identifier(savepoint_name)))
+                cur.execute(sql.SQL("RELEASE SAVEPOINT {}").format(sql.Identifier(savepoint_name)))
         except psycopg2.Error:
             pass
         return False

@@ -21,7 +21,7 @@ def _format_error_summary(errors: list, warnings: list, records_found: int) -> s
     if errors:
         parts.append(f"{len(errors)} parse error(s)")
         for err in errors[:3]:
-            parts.append(f"  • {str(err)[:100]}")
+            parts.append(f"  • {err!s:.100}")
 
     if warnings:
         parts.append(f"{len(warnings)} warning(s)")
