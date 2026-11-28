@@ -9,6 +9,11 @@ Usage:
 """
 
 import sys
+import os
+
+# Add parent directory to path so we can import adapters
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import requests
 from bs4 import BeautifulSoup
 from adapters.banks import boa, hibret, amhara
@@ -28,7 +33,7 @@ def diagnose(adapter_module, adapter_name):
     # 1. Check URL accessibility
     print(f"1. Checking URL: {spec.url}")
     try:
-        response = requests.get(spec.url, timeout=10)
+        response = requests.get(spec.url, timeout=10, verify=False)  # Disable SSL verification for diagnosis
         print(f"   ✓ Status: {response.status_code}")
         print(f"   ✓ Content-Length: {len(response.text)} bytes")
         html = response.text
