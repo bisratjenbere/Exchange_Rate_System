@@ -5,6 +5,9 @@ gunicorn==22.0.0
 # Database
 psycopg2-binary==2.9.9
 
+# Timezone
+pytz==2024.1
+
 # HTML Parsing
 beautifulsoup4==4.12.2
 lxml==4.9.4
