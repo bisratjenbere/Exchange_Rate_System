@@ -553,6 +553,40 @@ class RateObservationRepository(BaseRepository):
         row = self._fetch_one(query, (obs_id_1, obs_id_2))
         return bool(row and row[0])
 
+    def find_by_fingerprint(self, fingerprint: str) -> Optional[int]:
+        """Return observation id matching fingerprint, or None."""
+        query = """
+            SELECT id FROM rate_observation
+            WHERE snapshot_fingerprint = %s
+            LIMIT 1
+        """
+        row = self._fetch_one(query, (fingerprint,))
+        return row[0] if row else None
+
+    def find_current_by_logical_key(self, logical_key: str) -> Optional[int]:
+        """Return id of the current observation for a logical key, or None."""
+        query = """
+            SELECT id FROM rate_observation
+            WHERE logical_observation_key = %s AND is_current = TRUE
+            LIMIT 1
+        """
+        row = self._fetch_one(query, (logical_key,))
+        return row[0] if row else None
+
+    def find_by_fingerprint_and_source(
+        self, fingerprint: str, source_id: int, source_currency_code: str
+    ) -> Optional[int]:
+        """Return observation id for ambiguous duplicate check, or None."""
+        query = """
+            SELECT id FROM rate_observation
+            WHERE snapshot_fingerprint = %s
+              AND source_id = %s
+              AND source_currency_code = %s
+            LIMIT 1
+        """
+        row = self._fetch_one(query, (fingerprint, source_id, source_currency_code))
+        return row[0] if row else None
+
     def get_observation_for_review(
         self, observation_id: int
     ) -> Optional[Dict[str, Any]]:

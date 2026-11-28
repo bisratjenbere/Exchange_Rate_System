@@ -1,33 +1,27 @@
 from typing import Optional
+from db.repositories.rate_observation_repository import RateObservationRepository
+
 
 def classify_observation(
     fingerprint: str,
     logical_key: Optional[str],
     conn,
 ) -> tuple:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id FROM rate_observation WHERE snapshot_fingerprint = %s LIMIT 1",
-            (fingerprint,),
-        )
-        row = cur.fetchone()
-        if row:
-            return "duplicate", row[0]
+    repo = RateObservationRepository(conn)
 
-        if logical_key is None:
-            return "new", None
+    existing_id = repo.find_by_fingerprint(fingerprint)
+    if existing_id is not None:
+        return "duplicate", existing_id
 
-        cur.execute(
-            """SELECT id FROM rate_observation
-               WHERE logical_observation_key = %s AND is_current = TRUE
-               LIMIT 1""",
-            (logical_key,),
-        )
-        row = cur.fetchone()
-        if row:
-            return "changed", row[0]
-
+    if logical_key is None:
         return "new", None
+
+    current_id = repo.find_current_by_logical_key(logical_key)
+    if current_id is not None:
+        return "changed", current_id
+
+    return "new", None
+
 
 def classify_ambiguous_observation(
     fingerprint: str,
@@ -36,16 +30,10 @@ def classify_ambiguous_observation(
     category: str,
     conn,
 ) -> tuple:
-    with conn.cursor() as cur:
-        cur.execute(
-            """SELECT id FROM rate_observation
-               WHERE snapshot_fingerprint = %s
-                 AND source_id = %s
-                 AND source_currency_code = %s
-               LIMIT 1""",
-            (fingerprint, source_id, source_currency_code),
-        )
-        row = cur.fetchone()
-        if row:
-            return "duplicate", row[0]
-        return "new", None
+    repo = RateObservationRepository(conn)
+    existing_id = repo.find_by_fingerprint_and_source(
+        fingerprint, source_id, source_currency_code
+    )
+    if existing_id is not None:
+        return "duplicate", existing_id
+    return "new", None

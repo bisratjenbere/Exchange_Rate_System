@@ -73,6 +73,45 @@ class RateSourceRepository:
                 (fingerprint, source_id)
             )
 
+    def reset_failure_counter(self, source_id: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """UPDATE rate_source
+                   SET consecutive_failures = 0, last_failure_code = NULL
+                   WHERE id = %s""",
+                (source_id,),
+            )
+
+    def increment_failure_counter(self, source_id: int, error_code: str) -> tuple:
+        """
+        Increment consecutive_failures and return (consecutive, alert_sent_at).
+        Returns (0, None) if source not found.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """UPDATE rate_source
+                   SET consecutive_failures = consecutive_failures + 1,
+                       last_failure_at = now(),
+                       last_failure_code = %s
+                   WHERE id = %s
+                   RETURNING consecutive_failures, alert_sent_at""",
+                (error_code, source_id),
+            )
+            row = cur.fetchone()
+            return row if row else (0, None)
+
+    def write_alert(self, source_id: int, error_code: str, error_summary: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO source_alert (source_id, error_code, summary, created_at)
+                   VALUES (%s, %s, %s, now())""",
+                (source_id, error_code, (error_summary or "")[:500]),
+            )
+            cur.execute(
+                "UPDATE rate_source SET alert_sent_at = now() WHERE id = %s",
+                (source_id,),
+            )
+
     @staticmethod
     def _row_to_source(row) -> RateSource:
         return RateSource(

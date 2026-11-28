@@ -1,15 +1,18 @@
 import hashlib
+import logging
 import psycopg2.errors
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
-
 from db.repositories.rate_observation_repository import RateObservationRepository
+from db.repositories.collection_run_repository import CollectionRunRepository
 from domain.fallback import FallbackPolicy
 from infrastructure.rate_source_repository import RateSourceRepository
 from pipeline.ingest import ingest
 from pipeline.runs import finish_run, record_raw_capture, start_run
+
+logger = logging.getLogger(__name__)
 
 ALERT_AFTER_CONSECUTIVE_FAILURES = 2
 FALLBACK_TTL_DAYS = 3
@@ -61,49 +64,22 @@ def _run_status(ingest_result) -> str:
 
 
 def _reset_failure_counter(conn, source_id: int) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE rate_source
-               SET consecutive_failures = 0, last_failure_code = NULL
-               WHERE id = %s""",
-            (source_id,),
-        )
+    RateSourceRepository(conn).reset_failure_counter(source_id)
 
 
 def _increment_failure_counter(conn, source_id: int, error_code: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE rate_source
-               SET consecutive_failures = consecutive_failures + 1,
-                   last_failure_at = now(),
-                   last_failure_code = %s
-               WHERE id = %s
-               RETURNING consecutive_failures, alert_sent_at""",
-            (error_code, source_id),
-        )
-        row = cur.fetchone()
-        if not row:
-            return False
-        consecutive, alert_sent_at = row
-        if consecutive >= ALERT_AFTER_CONSECUTIVE_FAILURES:
-            if alert_sent_at is None or (
-                datetime.now(timezone.utc) - alert_sent_at
-            ).total_seconds() > 86400:
-                return True
+    repo = RateSourceRepository(conn)
+    consecutive, alert_sent_at = repo.increment_failure_counter(source_id, error_code)
+    if consecutive >= ALERT_AFTER_CONSECUTIVE_FAILURES:
+        if alert_sent_at is None or (
+            datetime.now(timezone.utc) - alert_sent_at
+        ).total_seconds() > 86400:
+            return True
     return False
 
 
 def _write_alert(conn, source_id: int, error_code: str, error_summary: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """INSERT INTO source_alert (source_id, error_code, summary, created_at)
-               VALUES (%s, %s, %s, now())""",
-            (source_id, error_code, (error_summary or "")[:500]),
-        )
-        cur.execute(
-            "UPDATE rate_source SET alert_sent_at = now() WHERE id = %s",
-            (source_id,),
-        )
+    RateSourceRepository(conn).write_alert(source_id, error_code, error_summary)
 
 
 def _expire_stale_fallback_current(conn, source_id: int) -> None:
@@ -233,21 +209,14 @@ def record_stale_retained(
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
-    with conn.cursor() as cur:
-        cur.execute(
-            """UPDATE collection_run
-               SET status = 'success', finished_at = now(),
-                   records_found = %s, records_accepted = %s,
-                   records_flagged = %s, records_duplicated = %s,
-                   error_code = 'stale_feed',
-                   error_summary = 'Primary returned stale records; retained as standing rate',
-                   duration_ms = %s
-               WHERE id = %s""",
-            (
-                len(records), result.accepted, result.flagged,
-                result.duplicates, duration_ms, run_id,
-            ),
-        )
+    CollectionRunRepository(conn).finish_stale_run(
+        run_id=run_id,
+        records_found=len(records),
+        records_accepted=result.accepted,
+        records_flagged=result.flagged,
+        records_duplicated=result.duplicates,
+        duration_ms=duration_ms,
+    )
 
     repo = RateSourceRepository(conn)
     repo.update_last_success(source_id)

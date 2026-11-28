@@ -186,6 +186,31 @@ class CollectionRunRepository(BaseRepository):
         row = self._fetch_one(query, (source_id,))
         return row[0] if row else None
 
+    def finish_stale_run(
+        self,
+        run_id: int,
+        records_found: int,
+        records_accepted: int,
+        records_flagged: int,
+        records_duplicated: int,
+        duration_ms: int,
+    ) -> None:
+        """Mark a stale-feed run as success with a fixed error_code."""
+        query = """
+            UPDATE collection_run
+            SET status = 'success', finished_at = now(),
+                records_found = %s, records_accepted = %s,
+                records_flagged = %s, records_duplicated = %s,
+                error_code = 'stale_feed',
+                error_summary = 'Primary returned stale records; retained as standing rate',
+                duration_ms = %s
+            WHERE id = %s
+        """
+        self._execute(query, (
+            records_found, records_accepted, records_flagged,
+            records_duplicated, duration_ms, run_id,
+        ))
+
     def insert_raw_capture(
         self,
         run_id: int,
