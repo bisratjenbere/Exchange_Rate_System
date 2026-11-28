@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 
 import psycopg2
@@ -6,7 +7,10 @@ from domain.fallback import FallbackPolicy
 from domain.source import RateSource
 from infrastructure.circuit_breaker import CircuitBreaker
 from infrastructure.rate_source_repository import RateSourceRepository
+from db.repositories.rate_observation_repository import RateObservationRepository
 from pipeline.runs import recover_stuck_run, start_run
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,18 @@ def validate_source_and_check_circuit_breaker(
                 "status": "skipped",
                 "detail": "circuit breaker open",
                 "adapter_key": adapter_key,
+            },
+        )
+
+    obs_repo = RateObservationRepository(conn)
+    if obs_repo.has_fresh_observation_today(source_id):
+        logger.debug("source=%s skipped — already has today's rate", source_id)
+        return PreflightResult(
+            should_proceed=False,
+            early_return={
+                "source_id": source_id,
+                "status": "skipped",
+                "detail": "already collected today",
             },
         )
 

@@ -553,6 +553,22 @@ class RateObservationRepository(BaseRepository):
         row = self._fetch_one(query, (obs_id_1, obs_id_2))
         return bool(row and row[0])
 
+    def has_fresh_observation_today(self, source_id: int) -> bool:
+        """
+        Return True if this source already has a non-fallback is_current observation
+        with effective_date = today.  Used to skip re-fetching banks that already
+        published their daily rate.
+        """
+        query = """
+            SELECT 1 FROM rate_observation
+            WHERE source_id = %s
+              AND is_current = TRUE
+              AND is_fallback = FALSE
+              AND effective_date = CURRENT_DATE
+            LIMIT 1
+        """
+        return self._fetch_one(query, (source_id,)) is not None
+
     def get_rates_for_comparison(self, observation_id: int) -> Optional[tuple]:
         """
         Get buying and selling rates for an observation.
